@@ -5,6 +5,7 @@ import android.content.Context;
 import com.xjw.bilifix.in.core.HookApi;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -56,11 +57,21 @@ final class SubtitleFileCompat {
                 return;
             }
             String source = readUtf8(file, sourceBytes);
-            if (source.isBlank()) {
+            int jsonStart = findJsonObjectStart(source);
+            if (jsonStart < 0) {
                 return;
             }
+            if (jsonStart > 0) {
+                source = source.substring(jsonStart);
+            }
 
-            JSONObject root = new JSONObject(source);
+            JSONObject root;
+            try {
+                root = new JSONObject(source);
+            } catch (JSONException ignored) {
+                module.debug("AI subtitle file skipped: invalid JSON file=" + file.getName());
+                return;
+            }
             if (!"AIsubtitle".equals(root.optString("type"))) {
                 return;
             }
@@ -95,6 +106,19 @@ final class SubtitleFileCompat {
             module.error("AI subtitle file normalization failed: file=" + file.getAbsolutePath(),
                     throwable);
         }
+    }
+
+    private static int findJsonObjectStart(String source) {
+        for (int index = 0; index < source.length(); index++) {
+            char current = source.charAt(index);
+            if ((index == 0 && current == '\uFEFF')
+                    || current == ' ' || current == '\t'
+                    || current == '\r' || current == '\n') {
+                continue;
+            }
+            return current == '{' ? index : -1;
+        }
+        return -1;
     }
 
     private static String readUtf8(File file, long expectedBytes) throws Exception {
