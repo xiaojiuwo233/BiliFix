@@ -23,6 +23,8 @@ public final class SettingsManager {
 
     static final String KEY_ARTICLE_FIX_ENABLED =
             "bilifix_article_fix_enabled";
+    static final String KEY_DYNAMIC_ARTICLE_FIX_ENABLED =
+            "bilifix_dynamic_article_fix_enabled";
     static final String KEY_IMAGE_PREVIEW_ENABLED =
             "bilifix_image_preview_enabled";
     static final String KEY_REGION_FIX_ENABLED =
@@ -54,6 +56,7 @@ public final class SettingsManager {
 
     private volatile boolean loaded;
     private volatile boolean articleFixEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean dynamicArticleFixEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean regionFixEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean relationFixEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean walletFixEnabled = DEFAULT_FEATURE_ENABLED;
@@ -70,6 +73,9 @@ public final class SettingsManager {
             }
             apply(
                     intent.getBooleanExtra(KEY_ARTICLE_FIX_ENABLED, articleFixEnabled),
+                    intent.getBooleanExtra(
+                            KEY_DYNAMIC_ARTICLE_FIX_ENABLED,
+                            dynamicArticleFixEnabled),
                     intent.getBooleanExtra(KEY_REGION_FIX_ENABLED, regionFixEnabled),
                     intent.getBooleanExtra(KEY_RELATION_FIX_ENABLED, relationFixEnabled),
                     intent.getBooleanExtra(KEY_WALLET_FIX_ENABLED, walletFixEnabled),
@@ -103,6 +109,8 @@ public final class SettingsManager {
             boolean committed = editor.commit();
             boolean articleEnabled = preferences.getBoolean(
                     KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
+            boolean dynamicArticleEnabled = preferences.getBoolean(
+                    KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
             boolean regionEnabled = preferences.getBoolean(
                     KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
             boolean relationEnabled = preferences.getBoolean(
@@ -117,13 +125,14 @@ public final class SettingsManager {
                     KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED);
             boolean shareEnabled = preferences.getBoolean(
                     KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED);
-            apply(articleEnabled, regionEnabled, relationEnabled,
+            apply(articleEnabled, dynamicArticleEnabled, regionEnabled, relationEnabled,
                     walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
                     aiCommentTranslationEnabled, shareEnabled, "settings-page");
 
             Intent update = new Intent(SETTINGS_CHANGED_ACTION)
                     .setPackage(TARGET_PACKAGE)
                     .putExtra(KEY_ARTICLE_FIX_ENABLED, articleEnabled)
+                    .putExtra(KEY_DYNAMIC_ARTICLE_FIX_ENABLED, dynamicArticleEnabled)
                     .putExtra(KEY_IMAGE_PREVIEW_ENABLED, articleEnabled)
                     .putExtra(KEY_REGION_FIX_ENABLED, regionEnabled)
                     .putExtra(KEY_RELATION_FIX_ENABLED, relationEnabled)
@@ -166,6 +175,8 @@ public final class SettingsManager {
                     preferences.getBoolean(
                             KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
+                            KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
                             KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_RELATION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
@@ -200,6 +211,7 @@ public final class SettingsManager {
 
     private void apply(
             boolean articleEnabled,
+            boolean dynamicArticleEnabled,
             boolean regionEnabled,
             boolean relationEnabled,
             boolean walletEnabled,
@@ -210,6 +222,7 @@ public final class SettingsManager {
             String source) {
         boolean changed = !loaded
                 || articleFixEnabled != articleEnabled
+                || dynamicArticleFixEnabled != dynamicArticleEnabled
                 || regionFixEnabled != regionEnabled
                 || relationFixEnabled != relationEnabled
                 || walletFixEnabled != walletEnabled
@@ -218,6 +231,7 @@ public final class SettingsManager {
                 || this.aiCommentTranslationEnabled != aiCommentTranslationEnabled
                 || systemShareEnabled != shareEnabled;
         articleFixEnabled = articleEnabled;
+        dynamicArticleFixEnabled = dynamicArticleEnabled;
         regionFixEnabled = regionEnabled;
         relationFixEnabled = relationEnabled;
         walletFixEnabled = walletEnabled;
@@ -229,6 +243,7 @@ public final class SettingsManager {
         String message = "settings " + (changed ? "applied" : "unchanged")
                 + ": source=" + source
                 + " articleFix=" + articleEnabled
+                + " dynamicArticleFix=" + dynamicArticleEnabled
                 + " imagePreview=" + articleEnabled
                 + " regionFix=" + regionEnabled
                 + " relationFix=" + relationEnabled
@@ -270,6 +285,10 @@ public final class SettingsManager {
 
     public boolean isArticleFixEnabled() {
         return articleFixEnabled;
+    }
+
+    public boolean isDynamicArticleFixEnabled() {
+        return dynamicArticleFixEnabled;
     }
 
     public boolean isImagePreviewEnabled() {

@@ -18,6 +18,8 @@ public interface HookApi {
 
     boolean isArticleFixEnabled();
 
+    boolean isDynamicArticleFixEnabled();
+
     boolean isImagePreviewEnabled();
 
     boolean isRegionFixEnabled();

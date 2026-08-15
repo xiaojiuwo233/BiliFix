@@ -20,6 +20,7 @@ import io.github.libxposed.api.XposedModule;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.feature.article.ArticleHooks;
+import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
 import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
 import com.xjw.bilifix.in.feature.compat.CompatFeatureHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
@@ -75,6 +76,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         new WebViewThemeHooks(this, classLoader).install();
         new CompatFeatureHooks(this, classLoader).install();
         if (mainProcess) {
+            new DynamicArticleIdentityHooks(this, classLoader).install();
             new CommentTranslationHooks(this, classLoader).install();
             new AiSubtitleHooks(this, classLoader).install();
             new IpLocationHooks(this, classLoader).install();
@@ -187,6 +189,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public boolean isArticleFixEnabled() {
         return settingsManager.isArticleFixEnabled();
+    }
+
+    @Override
+    public boolean isDynamicArticleFixEnabled() {
+        return settingsManager.isDynamicArticleFixEnabled();
     }
 
     @Override

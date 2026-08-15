@@ -8,6 +8,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ABOUT;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_COMMENT_TRANSLATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_SUBTITLE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ARTICLE_FIX_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_DYNAMIC_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
@@ -200,10 +201,19 @@ final class SettingsUiHooks {
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
                         addSwitch(repairCategory, switchConstructor,
+                                KEY_DYNAMIC_ARTICLE_FIX_ENABLED,
+                                "修复动态缺失",
+                                "修复动态无法显示新专栏投稿内容，与修复专栏配合使用最佳",
+                                settings.isDynamicArticleFixEnabled(), 1,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
+                        addSwitch(repairCategory, switchConstructor,
                                 KEY_REGION_FIX_ENABLED,
                                 "修复分区",
                                 "替换国际版分区接口",
-                                settings.isRegionFixEnabled(), 1,
+                                settings.isRegionFixEnabled(), 2,
                                 changeListenerClass, context,
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
@@ -212,7 +222,7 @@ final class SettingsUiHooks {
                                 KEY_RELATION_FIX_ENABLED,
                                 "修复关注与粉丝列表",
                                 "解决提示未登录问题",
-                                settings.isRelationFixEnabled(), 2,
+                                settings.isRelationFixEnabled(), 3,
                                 changeListenerClass, context,
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
@@ -221,7 +231,7 @@ final class SettingsUiHooks {
                                 KEY_WALLET_FIX_ENABLED,
                                 "修复钱包页",
                                 "替换webview页面",
-                                settings.isWalletFixEnabled(), 3,
+                                settings.isWalletFixEnabled(), 4,
                                 changeListenerClass, context,
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
@@ -285,6 +295,8 @@ final class SettingsUiHooks {
                         module.info("BiliFix settings page created: version="
                                 + BuildConfig.VERSION_NAME
                                 + " articleFix=" + settings.isArticleFixEnabled()
+                                + " dynamicArticleFix="
+                                + settings.isDynamicArticleFixEnabled()
                                 + " regionFix=" + settings.isRegionFixEnabled()
                                 + " relationFix=" + settings.isRelationFixEnabled()
                                 + " walletFix=" + settings.isWalletFixEnabled()
