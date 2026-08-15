@@ -13,6 +13,10 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 
 /** Adapts current AI subtitle JSON to the stricter parser bundled with the old client. */
@@ -52,6 +56,10 @@ final class SubtitleFileCompat {
                 return;
             }
             String source = readUtf8(file, sourceBytes);
+            if (source.isBlank()) {
+                return;
+            }
+
             JSONObject root = new JSONObject(source);
             if (!"AIsubtitle".equals(root.optString("type"))) {
                 return;
@@ -84,7 +92,7 @@ final class SubtitleFileCompat {
                     + " patchedLocation=" + patched
                     + " bytes=" + sourceBytes + "->" + normalized.length);
         } catch (Throwable throwable) {
-            module.error("AI subtitle file normalization failed: file=" + file.getName(),
+            module.error("AI subtitle file normalization failed: file=" + file.getAbsolutePath(),
                     throwable);
         }
     }
@@ -101,7 +109,16 @@ final class SubtitleFileCompat {
                     throw new IllegalStateException("subtitle file exceeds size limit");
                 }
             }
-            return output.toString(StandardCharsets.UTF_8.name());
+
+            byte[] data = output.toByteArray();
+            try {
+                CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
+                decoder.onMalformedInput(CodingErrorAction.REPORT);
+                decoder.onUnmappableCharacter(CodingErrorAction.REPORT);
+                return decoder.decode(ByteBuffer.wrap(data)).toString();
+            } catch (CharacterCodingException e) {
+                return "";
+            }
         }
     }
 
