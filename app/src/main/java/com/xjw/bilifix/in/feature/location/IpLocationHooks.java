@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Supplies a compatible request identity needed by the host's existing IP location UI. */
@@ -49,8 +50,11 @@ public final class IpLocationHooks {
     private final HookApi module;
     private final ClassLoader classLoader;
     private final ThreadLocal<RequestScope> requestScope = new ThreadLocal<>();
+    private final Map<Object, RequestScope> mossCallScopes =
+            Collections.synchronizedMap(new WeakHashMap<>());
     private final AtomicInteger requestLogCount = new AtomicInteger();
     private final AtomicInteger metadataLogCount = new AtomicInteger();
+    private final AtomicInteger transportLogCount = new AtomicInteger();
     private final AtomicInteger commentHitLogCount = new AtomicInteger();
     private final AtomicInteger commentMissLogCount = new AtomicInteger();
     private final AtomicInteger profileLogCount = new AtomicInteger();
@@ -193,7 +197,48 @@ public final class IpLocationHooks {
         installMossCallScope("IP location blocking comment RPC", blockingUnaryCall,
                 descriptorName);
 
-        installMossOkHttpScope();
+        installMossSubgroup("gRPC final transport",
+                () -> installMossGrpcTransportScopes(descriptorName));
+        installMossOkHttpScopes();
+        installMossSubgroup("OkHttp encoded header fallback",
+                () -> installEncodedMossHeaderHooks(
+                        metadataFactoryClass, metadata, device, fawkes));
+    }
+
+    private void installEncodedMossHeaderHooks(
+            Class<?> metadataFactoryClass, ProtoIdentityRewriter metadata,
+            ProtoIdentityRewriter device, ProtoFawkesRewriter fawkes) throws Throwable {
+        Method createEncodedMetadata = module.declaredMethod(metadataFactoryClass, "f");
+        Method createEncodedDevice = module.declaredMethod(metadataFactoryClass, "c");
+        Method createEncodedFawkes = module.declaredMethod(metadataFactoryClass, "b");
+        module.deoptimizeFeatureMethod(createEncodedMetadata);
+        module.deoptimizeFeatureMethod(createEncodedDevice);
+        module.deoptimizeFeatureMethod(createEncodedFawkes);
+
+        Class<?> codecOwnerClass = module.load(classLoader, "uh1.e");
+        Field codecInstanceField;
+        try {
+            codecInstanceField = module.declaredField(codecOwnerClass, "a");
+        } catch (NoSuchFieldException ignored) {
+            codecInstanceField = module.declaredField(codecOwnerClass, "INSTANCE");
+        }
+        Object codec = codecInstanceField.get(null);
+        if (codec == null) {
+            throw new IllegalStateException("Moss header codec companion is null");
+        }
+        Method decodeHeader = module.declaredMethod(
+                codecInstanceField.getType(), "a", String.class);
+        Method encodeHeader = module.declaredMethod(
+                codecInstanceField.getType(), "b", byte[].class);
+        installEncodedProtoRewriteHook(
+                "IP location Moss OkHttp metadata", createEncodedMetadata,
+                metadata, codec, decodeHeader, encodeHeader);
+        installEncodedProtoRewriteHook(
+                "IP location Moss OkHttp device", createEncodedDevice,
+                device, codec, decodeHeader, encodeHeader);
+        installEncodedProtoRewriteHook(
+                "IP location Moss OkHttp Fawkes", createEncodedFawkes,
+                fawkes, codec, decodeHeader, encodeHeader);
     }
 
     private void installProtoRewriteHook(
@@ -222,6 +267,42 @@ public final class IpLocationHooks {
         });
     }
 
+    private void installEncodedProtoRewriteHook(
+            String label, Method factory, ProtoRewriter rewriter,
+            Object codec, Method decodeHeader, Method encodeHeader) {
+        module.addHook(label, factory, hookChain -> {
+            Object result = hookChain.proceed();
+            RequestScope scope = requestScope.get();
+            if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
+                    || !module.isIpLocationEnabled() || !(result instanceof String)) {
+                return result;
+            }
+            try {
+                Object decoded = module.invoke(decodeHeader, codec, result);
+                if (!(decoded instanceof byte[])) {
+                    throw new IllegalStateException("decode returned " + summarize(decoded));
+                }
+                ProtoRewriteResult rewritten = rewriter.rewrite((byte[]) decoded);
+                Object encoded = module.invoke(
+                        encodeHeader, codec, (Object) rewritten.bytes);
+                if (!(encoded instanceof String)) {
+                    throw new IllegalStateException("encode returned " + summarize(encoded));
+                }
+                if (shouldSample(metadataLogCount.incrementAndGet(), 30, 100)) {
+                    module.debug(label + " rewritten: source=" + scope.source
+                            + " oldIdentity=" + rewritten.originalIdentity
+                            + " newIdentity=" + rewritten.rewrittenIdentity
+                            + " encodedLength=" + ((String) encoded).length());
+                }
+                return encoded;
+            } catch (Throwable throwable) {
+                module.error(label + " rewrite failed; original header retained: source="
+                        + scope.source, throwable);
+                return result;
+            }
+        });
+    }
+
     private void installMossCallScope(
             String label, Method callMethod, Method descriptorName) {
         module.addHook(label, callMethod, hookChain -> {
@@ -241,8 +322,77 @@ public final class IpLocationHooks {
         });
     }
 
-    private void installMossOkHttpScope() throws Throwable {
-        Class<?> interceptorClass = module.load(classLoader, "cg1.a");
+    private void installMossGrpcTransportScopes(Method descriptorName) throws Throwable {
+        Class<?> methodDescriptorClass = module.load(classLoader, "io.grpc.MethodDescriptor");
+        Class<?> callOptionsClass = module.load(classLoader, "io.grpc.c");
+        Class<?> channelClass = module.load(classLoader, "io.grpc.d");
+        Class<?> responseListenerClass = module.load(classLoader, "io.grpc.e$a");
+        Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
+
+        installMossGrpcTransportScope(
+                "metadata/device", "of1.a", "of1.a$a", descriptorName,
+                methodDescriptorClass, callOptionsClass, channelClass,
+                responseListenerClass, headersClass);
+        installMossGrpcTransportScope(
+                "Fawkes", "rf1.a", "rf1.a$a", descriptorName,
+                methodDescriptorClass, callOptionsClass, channelClass,
+                responseListenerClass, headersClass);
+    }
+
+    private void installMossGrpcTransportScope(
+            String part, String interceptorClassName, String callClassName,
+            Method descriptorName, Class<?> methodDescriptorClass,
+            Class<?> callOptionsClass, Class<?> channelClass,
+            Class<?> responseListenerClass, Class<?> headersClass) throws Throwable {
+        Class<?> interceptorClass = module.load(classLoader, interceptorClassName);
+        Class<?> callClass = module.load(classLoader, callClassName);
+        Method createCall = module.declaredMethod(
+                interceptorClass, "a", methodDescriptorClass,
+                callOptionsClass, channelClass);
+        Method startCall = module.declaredMethod(
+                callClass, "e", responseListenerClass, headersClass);
+        module.deoptimizeFeatureMethod(createCall);
+        module.deoptimizeFeatureMethod(startCall);
+
+        module.addHook("IP location Moss gRPC " + part + " call registration",
+                createCall, hookChain -> {
+                    Object descriptor = hookChain.getArg(0);
+                    String fullMethodName = String.valueOf(
+                            module.invoke(descriptorName, descriptor));
+                    if (!isCommentReadRpc(fullMethodName)) {
+                        return hookChain.proceed();
+                    }
+                    module.ensureFeatureSettings(currentApplication());
+                    Object call = hookChain.proceed();
+                    if (module.isIpLocationEnabled() && call != null) {
+                        mossCallScopes.put(call, new RequestScope(
+                                ScopeKind.COMMENT_RPC,
+                                "Moss-gRPC " + fullMethodName + " [" + part + "]"));
+                    }
+                    return call;
+                });
+
+        module.addHook("IP location Moss gRPC " + part + " final headers",
+                startCall, hookChain -> {
+                    RequestScope scope = mossCallScopes.remove(hookChain.getThisObject());
+                    if (scope == null || !module.isIpLocationEnabled()) {
+                        return hookChain.proceed();
+                    }
+                    logFinalTransport("grpc", scope.source);
+                    return withScope(scope.kind, scope.source, hookChain::proceed);
+                });
+    }
+
+    private void installMossOkHttpScopes() {
+        installMossSubgroup("OkHttp metadata/device final transport",
+                () -> installMossOkHttpScope("metadata/device", "cg1.a"));
+        installMossSubgroup("OkHttp Fawkes final transport",
+                () -> installMossOkHttpScope("Fawkes", "dg1.a"));
+    }
+
+    private void installMossOkHttpScope(String part, String interceptorClassName)
+            throws Throwable {
+        Class<?> interceptorClass = module.load(classLoader, interceptorClassName);
         Class<?> chainClass = module.load(classLoader, "okhttp3.u$a");
         Class<?> requestClass = module.load(classLoader, "okhttp3.a0");
         Method intercept = module.declaredMethod(interceptorClass, "intercept", chainClass);
@@ -250,7 +400,8 @@ public final class IpLocationHooks {
         Method getUrl = module.declaredMethod(requestClass, "l");
         module.deoptimizeFeatureMethod(intercept);
 
-        module.addHook("IP location Moss OkHttp scope", intercept, hookChain -> {
+        module.addHook("IP location Moss OkHttp " + part + " final headers",
+                intercept, hookChain -> {
             Object chain = hookChain.getArg(0);
             Object request = module.invoke(getRequest, chain);
             String url = String.valueOf(module.invoke(getUrl, request));
@@ -262,8 +413,9 @@ public final class IpLocationHooks {
                 return hookChain.proceed();
             }
             Uri uri = Uri.parse(url);
-            String source = "Moss-OkHttp " + uri.getEncodedPath();
+            String source = "Moss-OkHttp " + uri.getEncodedPath() + " [" + part + "]";
             logTargetRequest(ScopeKind.COMMENT_RPC, source);
+            logFinalTransport("downgrade-okhttp", source);
             return withScope(ScopeKind.COMMENT_RPC, source, hookChain::proceed);
         });
     }
@@ -546,6 +698,14 @@ public final class IpLocationHooks {
         }
     }
 
+    private void logFinalTransport(String transport, String source) {
+        int sequence = transportLogCount.incrementAndGet();
+        if (shouldSample(sequence, 40, 100)) {
+            module.info("IP location final Moss transport: transport=" + transport
+                    + " source=" + source + " sample=" + sequence);
+        }
+    }
+
     private Context currentApplication() {
         try {
             Class<?> activityThread = Class.forName("android.app.ActivityThread");
@@ -564,6 +724,15 @@ public final class IpLocationHooks {
             module.info("IP location hook group ready: " + label);
         } catch (Throwable throwable) {
             module.error("IP location hook group unavailable: " + label, throwable);
+        }
+    }
+
+    private void installMossSubgroup(String label, ThrowingAction action) {
+        try {
+            action.run();
+            module.info("IP location Moss subgroup ready: " + label);
+        } catch (Throwable throwable) {
+            module.error("IP location Moss subgroup unavailable: " + label, throwable);
         }
     }
 
