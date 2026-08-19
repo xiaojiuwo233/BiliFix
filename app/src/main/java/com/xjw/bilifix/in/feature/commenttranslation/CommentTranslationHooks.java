@@ -23,6 +23,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Restores the domestic client's TranslateReply action in comment long-press menus. */
@@ -33,6 +38,8 @@ public final class CommentTranslationHooks {
     private static final int SWITCH_UNSUPPORTED = 1;
     private static final int SWITCH_SHOW_TRANSLATION = 2;
     private static final int SWITCH_SHOW_ORIGIN = 3;
+    private static final int MAX_TRANSLATION_THREADS = 2;
+    private static final int MAX_QUEUED_TRANSLATIONS = 16;
 
     private final HookApi module;
     private final ClassLoader classLoader;
@@ -49,6 +56,17 @@ public final class CommentTranslationHooks {
     private final Map<Long, TranslationState> states = boundedMap(512);
     private final AtomicInteger fallbackEligibilityLogs = new AtomicInteger();
     private final Object translationClientLock = new Object();
+    // Bounded so that rapidly tapping "translate" across a comment list cannot spawn an
+    // unbounded number of blocking gRPC threads.
+    private final ThreadPoolExecutor translationExecutor = new ThreadPoolExecutor(
+            MAX_TRANSLATION_THREADS, MAX_TRANSLATION_THREADS,
+            30L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(MAX_QUEUED_TRANSLATIONS),
+            runnable -> {
+                Thread thread = new Thread(runnable, "BiliFix-CommentTranslation");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private volatile Constructor<?> menuItemConstructor;
     private volatile Object copyAction;
@@ -67,6 +85,7 @@ public final class CommentTranslationHooks {
     public CommentTranslationHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
         this.classLoader = classLoader;
+        translationExecutor.allowCoreThreadTimeOut(true);
     }
 
     public void install() {
@@ -334,7 +353,7 @@ public final class CommentTranslationHooks {
                         TranslationState state = stateFor(context.rpid);
                         ViewDisplayState displayState = viewDisplayStateFor(
                                 context.view.get(), context.rpid, context.rawText);
-                        String title = state.loading
+                        String title = state.loading.get()
                                 ? TITLE_TRANSLATING
                                 : displayState != null && displayState.showingTranslation
                                 ? TITLE_SHOW_ORIGIN : TITLE_TRANSLATE;
@@ -658,7 +677,7 @@ public final class CommentTranslationHooks {
                     + " original=" + textFingerprint(original));
             return;
         }
-        if (state.loading || TITLE_TRANSLATING.equals(title)) {
+        if (state.loading.get() || TITLE_TRANSLATING.equals(title)) {
             module.debug("duplicate comment translation request ignored: rpid="
                     + context.rpid);
             return;
@@ -675,8 +694,13 @@ public final class CommentTranslationHooks {
             return;
         }
 
-        state.loading = true;
-        Thread worker = new Thread(() -> {
+        // Claim the slot atomically; two menu paths can reach this point concurrently.
+        if (!state.loading.compareAndSet(false, true)) {
+            module.debug("concurrent comment translation request ignored: rpid="
+                    + context.rpid);
+            return;
+        }
+        Runnable worker = () -> {
             try {
                 MossTranslationClient client = getOrCreateTranslationClient();
                 ProtoWire.TranslationPayload payload = client.translate(
@@ -718,11 +742,19 @@ public final class CommentTranslationHooks {
                     }
                 });
             } finally {
-                state.loading = false;
+                state.loading.set(false);
             }
-        }, "BiliFix-CommentTranslation-" + context.rpid);
-        worker.setDaemon(true);
-        worker.start();
+        };
+        try {
+            translationExecutor.execute(worker);
+        } catch (RejectedExecutionException rejected) {
+            state.loading.set(false);
+            module.warn("comment translation rejected; queue saturated: rpid=" + context.rpid);
+            Context toastContext = context.viewContext();
+            if (toastContext != null) {
+                Toast.makeText(toastContext, "翻译请求过多，请稍后重试", Toast.LENGTH_SHORT).show();
+            }
+        }
     }
 
     private MossTranslationClient getOrCreateTranslationClient() throws Throwable {
@@ -973,7 +1005,7 @@ public final class CommentTranslationHooks {
     }
 
     private static final class TranslationState {
-        volatile boolean loading;
+        final AtomicBoolean loading = new AtomicBoolean();
         volatile String translatedText;
     }
 

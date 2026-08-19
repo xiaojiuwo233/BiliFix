@@ -101,33 +101,48 @@ public final class SettingsManager {
     boolean persist(Context context, String key, boolean value) {
         try {
             SharedPreferences preferences = preferences(context);
-            SharedPreferences.Editor editor = preferences.edit().putBoolean(key, value);
-            if (KEY_ARTICLE_FIX_ENABLED.equals(key)) {
-                // Compatibility with 0.3.x: image preview now follows the article repair switch.
-                editor.putBoolean(KEY_IMAGE_PREVIEW_ENABLED, value);
+            boolean articleEnabled;
+            boolean dynamicArticleEnabled;
+            boolean regionEnabled;
+            boolean relationEnabled;
+            boolean walletEnabled;
+            boolean ipLocationEnabled;
+            boolean aiSubtitleEnabled;
+            boolean aiCommentTranslationEnabled;
+            boolean shareEnabled;
+            // The write, the read-back and the publish must be atomic against ensureLoaded(),
+            // which would otherwise republish the snapshot it captured before this write.
+            synchronized (stateLock) {
+                SharedPreferences.Editor editor = preferences.edit().putBoolean(key, value);
+                if (KEY_ARTICLE_FIX_ENABLED.equals(key)) {
+                    // Compatibility with 0.3.x: image preview follows the article repair switch.
+                    editor.putBoolean(KEY_IMAGE_PREVIEW_ENABLED, value);
+                }
+                // apply() keeps the settings switch off the main thread's disk write path; the
+                // in-memory state below is what every feature hook actually reads.
+                editor.apply();
+                articleEnabled = preferences.getBoolean(
+                        KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
+                dynamicArticleEnabled = preferences.getBoolean(
+                        KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
+                regionEnabled = preferences.getBoolean(
+                        KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
+                relationEnabled = preferences.getBoolean(
+                        KEY_RELATION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
+                walletEnabled = preferences.getBoolean(
+                        KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
+                ipLocationEnabled = preferences.getBoolean(
+                        KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED);
+                aiSubtitleEnabled = preferences.getBoolean(
+                        KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED);
+                aiCommentTranslationEnabled = preferences.getBoolean(
+                        KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED);
+                shareEnabled = preferences.getBoolean(
+                        KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED);
+                applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled,
+                        relationEnabled, walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
+                        aiCommentTranslationEnabled, shareEnabled, "settings-page");
             }
-            boolean committed = editor.commit();
-            boolean articleEnabled = preferences.getBoolean(
-                    KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean dynamicArticleEnabled = preferences.getBoolean(
-                    KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean regionEnabled = preferences.getBoolean(
-                    KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean relationEnabled = preferences.getBoolean(
-                    KEY_RELATION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean walletEnabled = preferences.getBoolean(
-                    KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean ipLocationEnabled = preferences.getBoolean(
-                    KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean aiSubtitleEnabled = preferences.getBoolean(
-                    KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean aiCommentTranslationEnabled = preferences.getBoolean(
-                    KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED);
-            boolean shareEnabled = preferences.getBoolean(
-                    KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED);
-            apply(articleEnabled, dynamicArticleEnabled, regionEnabled, relationEnabled,
-                    walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
-                    aiCommentTranslationEnabled, shareEnabled, "settings-page");
 
             Intent update = new Intent(SETTINGS_CHANGED_ACTION)
                     .setPackage(TARGET_PACKAGE)
@@ -145,8 +160,8 @@ public final class SettingsManager {
                     .putExtra(KEY_SYSTEM_SHARE_ENABLED, shareEnabled);
             context.sendBroadcast(update);
             module.info("setting persisted: key=" + key + " value=" + value
-                    + " committed=" + committed + " broadcast=true");
-            return committed;
+                    + " broadcast=true");
+            return true;
         } catch (Throwable throwable) {
             module.error("setting persistence failed: key=" + key + " value=" + value,
                     throwable);
@@ -209,7 +224,30 @@ public final class SettingsManager {
         return preferences;
     }
 
+    /**
+     * Publishes a complete setting snapshot. Callers that read the snapshot from storage must
+     * hold {@code stateLock} across both the read and this call, otherwise a concurrent write
+     * can be overwritten by an older snapshot.
+     */
     private void apply(
+            boolean articleEnabled,
+            boolean dynamicArticleEnabled,
+            boolean regionEnabled,
+            boolean relationEnabled,
+            boolean walletEnabled,
+            boolean ipLocationEnabled,
+            boolean aiSubtitleEnabled,
+            boolean aiCommentTranslationEnabled,
+            boolean shareEnabled,
+            String source) {
+        synchronized (stateLock) {
+            applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled, relationEnabled,
+                    walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
+                    aiCommentTranslationEnabled, shareEnabled, source);
+        }
+    }
+
+    private void applyLocked(
             boolean articleEnabled,
             boolean dynamicArticleEnabled,
             boolean regionEnabled,

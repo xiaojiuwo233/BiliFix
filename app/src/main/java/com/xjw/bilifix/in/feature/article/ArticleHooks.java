@@ -24,12 +24,11 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.github.libxposed.api.XposedInterface;
@@ -40,7 +39,10 @@ public final class ArticleHooks {
             "tv.danmaku.bili.ui.webview.MWebActivity";
     private static final String ARTICLE_VIEWINFO = "/x/article/viewinfo";
     private static final int EVA3_ARTICLE_TYPE = 4;
-    private static final long PEEK_LIMIT_BYTES = 2L * 1024L * 1024L;
+    // Only "code" and "data.type" are read from the viewinfo payload, so a small peek keeps the
+    // per-response allocation off the network thread's hot path.
+    private static final long PEEK_LIMIT_BYTES = 256L * 1024L;
+    private static final int MAX_ARTICLE_TYPE_ENTRIES = 256;
     private static final long PENDING_ARTICLE_TTL_MILLIS = 30_000L;
     private static final long WEB_ARTICLE_SESSION_TTL_MILLIS = 10L * 60L * 1000L;
     private static final long WEB_ARTICLE_RELAUNCH_GUARD_MILLIS = 5_000L;
@@ -50,8 +52,8 @@ public final class ArticleHooks {
     private final ClassLoader classLoader;
     private final ArticleImagePreview imagePreview;
     private volatile Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final ConcurrentMap<Long, Integer> articleTypes = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Long> dynamicToArticle = new ConcurrentHashMap<>();
+    private final Map<Long, Integer> articleTypes = boundedMap(MAX_ARTICLE_TYPE_ENTRIES);
+    private final Map<String, Long> dynamicToArticle = boundedMap(MAX_ARTICLE_TYPE_ENTRIES);
     private final AtomicReference<PendingArticle> pendingArticle = new AtomicReference<>();
     private final AtomicReference<WebArticleSession> webArticleSession =
             new AtomicReference<>();
@@ -1213,6 +1215,16 @@ public final class ArticleHooks {
         }
     }
 
+    /** Access-ordered map that evicts its least recently used entry past {@code maxEntries}. */
+    private static <K, V> Map<K, V> boundedMap(int maxEntries) {
+        return Collections.synchronizedMap(
+                new LinkedHashMap<K, V>(maxEntries + 1, 0.75f, true) {
+                    @Override
+                    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                        return size() > maxEntries;
+                    }
+                });
+    }
 
     private boolean isArticleFixEnabled() {
         return module.isArticleFixEnabled();

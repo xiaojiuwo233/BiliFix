@@ -24,7 +24,9 @@ public final class OpusRendererScript {
                     if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
                       return 'bilifix:no-opus-data';
                     }
-                    if (root.dataset.bilifixRendered === '1') {
+                    // Keyed by article URL: a recycled WebView carrying another article's
+                    // marker must still re-render instead of showing the previous content.
+                    if (root.dataset.bilifixRendered === articleUrl) {
                       return 'bilifix:already-rendered';
                     }
 
@@ -309,7 +311,7 @@ public final class OpusRendererScript {
                     reader.appendChild(footer);
                     while (root.firstChild) root.removeChild(root.firstChild);
                     root.appendChild(reader);
-                    root.dataset.bilifixRendered = '1';
+                    root.dataset.bilifixRendered = articleUrl;
                     return JSON.stringify({
                       status: 'rendered',
                       cvid: info.id || 0,

@@ -29,6 +29,7 @@ import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -46,6 +47,8 @@ final class ImageShareManager {
     private static final long MAX_SHARE_BYTES = 64L * 1024L * 1024L;
     private static final long MAX_FALLBACK_PIXELS = 8L * 1024L * 1024L;
     private static final int MAX_REUSABLE_SOURCE_ENTRIES = 64;
+    private static final int MAX_SHARE_CACHE_ENTRIES = 32;
+    private static final long SHARE_CACHE_TTL_MILLIS = 10L * 60L * 1000L;
 
     private final HookApi module;
     private final ClassLoader classLoader;
@@ -555,9 +558,50 @@ final class ImageShareManager {
         if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory()) {
             throw new IllegalStateException("cannot create share cache directory");
         }
+        pruneShareCache(directory);
         String safeLabel = label.replaceAll("[^a-zA-Z0-9_-]", "_");
         return new File(directory, safeLabel + "_" + System.currentTimeMillis()
                 + "_" + fileSequence.incrementAndGet() + suffix);
+    }
+
+    /**
+     * Drops the oldest share artifacts so the cache directory cannot grow without bound. A file
+     * handed to the chooser must stay readable while the user picks a target, so entries are only
+     * removed once they are both outside the newest {@link #MAX_SHARE_CACHE_ENTRIES} and older
+     * than {@link #SHARE_CACHE_TTL_MILLIS}.
+     */
+    private void pruneShareCache(File directory) {
+        try {
+            File[] entries = directory.listFiles();
+            if (entries == null || entries.length <= MAX_SHARE_CACHE_ENTRIES) {
+                return;
+            }
+            Arrays.sort(entries, (left, right) ->
+                    Long.compare(left.lastModified(), right.lastModified()));
+            long expiredBefore = System.currentTimeMillis() - SHARE_CACHE_TTL_MILLIS;
+            int candidateCount = entries.length - MAX_SHARE_CACHE_ENTRIES;
+            int removed = 0;
+            for (int index = 0; index < candidateCount; index++) {
+                File entry = entries[index];
+                if (!entry.isFile() || entry.lastModified() >= expiredBefore
+                        || isReusableSourceFile(entry)) {
+                    continue;
+                }
+                if (entry.delete()) {
+                    removed++;
+                }
+            }
+            if (removed > 0) {
+                module.debug("system share cache pruned: removed=" + removed
+                        + " remaining=" + (entries.length - removed));
+            }
+        } catch (Throwable throwable) {
+            module.debug("system share cache prune skipped: " + throwable);
+        }
+    }
+
+    private synchronized boolean isReusableSourceFile(File file) {
+        return reusableSourceFiles.containsValue(file);
     }
 
     private Bitmap snapshotView(View view) {

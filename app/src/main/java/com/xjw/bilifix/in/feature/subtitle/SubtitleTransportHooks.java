@@ -24,6 +24,9 @@ final class SubtitleTransportHooks {
     private static final String REQUEST_CLASS =
             "tv.danmaku.biliplayerv2.service.interact.biz.chronos.chronosrpc.methods."
                     + "receive.URLRequest$Request";
+    private static final int MAX_JSON_SUMMARY_CHARS = 64 * 1024;
+    private static final int SUMMARY_SAMPLE_HEAD = 5;
+    private static final int SUMMARY_SAMPLE_INTERVAL = 50;
 
     private final HookApi module;
     private final ClassLoader classLoader;
@@ -128,7 +131,7 @@ final class SubtitleTransportHooks {
                         + " contentType=" + contentType(headers)
                         + " contentChars=" + (content == null ? -1 : content.length())
                         + " binaryBytes=" + binaryBytes
-                        + " json=" + summarizeJson(content));
+                        + " json=" + summarizeJson(content, sample));
             } catch (Throwable throwable) {
                 module.error("AI subtitle transport response inspection failed: url="
                         + sanitizeUrl(url), throwable);
@@ -205,12 +208,22 @@ final class SubtitleTransportHooks {
         return "";
     }
 
-    private static String summarizeJson(String content) {
+    /**
+     * Builds a diagnostics-only summary. Parsing a full subtitle payload allocates several times
+     * its size, so this samples responses and skips oversized bodies outright.
+     */
+    private static String summarizeJson(String content, int sample) {
         if (content == null || content.trim().isEmpty()) {
             return "empty";
         }
         if (content.startsWith("/download_files/")) {
             return "fileRef(name=" + content.substring(content.lastIndexOf('/') + 1) + ")";
+        }
+        if (sample > SUMMARY_SAMPLE_HEAD && sample % SUMMARY_SAMPLE_INTERVAL != 0) {
+            return "sampled-out(chars=" + content.length() + ")";
+        }
+        if (content.length() > MAX_JSON_SUMMARY_CHARS) {
+            return "oversized(chars=" + content.length() + ")";
         }
         try {
             JSONObject root = new JSONObject(content);
