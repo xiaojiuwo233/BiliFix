@@ -362,6 +362,10 @@ public final class SystemShareHooks {
                         imageView = (View) value;
                     }
                 }
+                String originSource = sources.isEmpty() ? null : sources.get(0);
+                module.info("comment image system-share selected: source="
+                        + imageShareManager.describeSource(originSource)
+                        + " gif=" + GifInspector.isGifUrl(originSource));
                 imageShareManager.startImageShare(
                         context, sources, imageView, null, "comment-image");
                 return Boolean.TRUE;

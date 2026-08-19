@@ -3,6 +3,7 @@ package com.xjw.bilifix.in.feature.share;
 import static com.xjw.bilifix.in.core.ModuleConstants.TARGET_PACKAGE;
 
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -99,12 +100,17 @@ final class ImageShareManager {
             appContext = safeContext;
         }
         List<String> normalizedSources = normalizeSources(sources);
+        String primarySource = firstSource(normalizedSources);
+        boolean preserveGif = GifInspector.isGifUrl(primarySource);
+        // The snapshot is captured even for GIF sources: it is the only way to still share
+        // something when the origin only serves a transcoded still image.
         Bitmap fallback = snapshotView(fallbackView);
         Context finalContext = appContext;
         Bitmap finalFallback = fallback;
         module.info("system share queued: label=" + label
-                + " source=" + describeSource(firstSource(normalizedSources))
+                + " source=" + describeSource(primarySource)
                 + " candidates=" + normalizedSources.size()
+                + " preserveGif=" + preserveGif
                 + " fallback=" + (fallback != null)
                 + " captureMs=" + (SystemClock.elapsedRealtime() - queuedAt));
         executor.execute(() -> {
@@ -112,7 +118,7 @@ final class ImageShareManager {
             String preparationPath = "none";
             try {
                 MaterializedImage materialized = materializeSources(
-                        finalContext, normalizedSources, label);
+                        finalContext, normalizedSources, label, preserveGif);
                 if (materialized != null) {
                     shareFile = materialized.file;
                     preparationPath = materialized.path;
@@ -124,13 +130,20 @@ final class ImageShareManager {
                 if (shareFile == null || shareFile.length() <= 0L) {
                     throw new IllegalStateException("no shareable image available");
                 }
+                GifInspector.Inspection gifInspection = GifInspector.inspect(shareFile);
+                if (preserveGif && !gifInspection.gif) {
+                    module.warn("system share kept a static image for a GIF source: label="
+                            + label + " path=" + preparationPath);
+                }
                 Uri contentUri = fileProviderUri(finalContext, shareFile);
                 String mime = detectMime(shareFile);
                 Intent send = new Intent(Intent.ACTION_SEND)
                         .setType(mime)
                         .putExtra(Intent.EXTRA_STREAM, contentUri)
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                send.setClipData(ClipData.newRawUri("BiliFix image", contentUri));
+                send.setClipData(new ClipData(
+                        new ClipDescription("BiliFix image", new String[]{mime}),
+                        new ClipData.Item(contentUri)));
                 if (text != null && !text.isEmpty()) {
                     send.putExtra(Intent.EXTRA_TEXT, text);
                 }
@@ -148,6 +161,8 @@ final class ImageShareManager {
                                 + " file=" + completedFile.getName()
                                 + " bytes=" + completedFile.length()
                                 + " mime=" + mime
+                                + " gif=" + gifInspection.gif
+                                + " gifFrames=" + gifInspection.frameSummary()
                                 + " prepareMs=" + (preparedAt - queuedAt)
                                 + " totalMs="
                                 + (SystemClock.elapsedRealtime() - queuedAt));
@@ -173,7 +188,20 @@ final class ImageShareManager {
     }
 
     private MaterializedImage materializeSources(
-            Context context, List<String> sources, String label) throws Throwable {
+            Context context, List<String> sources, String label, boolean preserveGif)
+            throws Throwable {
+        if (preserveGif) {
+            MaterializedImage animated =
+                    materializeGifSource(context, firstSource(sources), label);
+            if (animated != null) {
+                return animated;
+            }
+            // Hosts serve many ".gif" URLs as transcoded stills; sharing that still image is
+            // far better than failing the whole share.
+            module.warn("system share GIF origin unavailable; using static image: label="
+                    + label);
+        }
+
         File reusable = findReusableSourceFile(sources);
         if (isReadableImageCandidate(reusable)) {
             module.debug("system share reusable file hit: label=" + label
@@ -217,6 +245,113 @@ final class ImageShareManager {
             return new MaterializedImage(downloaded, "network");
         }
         return null;
+    }
+
+    private MaterializedImage materializeGifSource(
+            Context context, String originalSource, String label) throws Throwable {
+        if (originalSource == null || originalSource.isEmpty()) {
+            return null;
+        }
+        List<String> exactSource = Collections.singletonList(originalSource);
+
+        File reusable = findReusableSourceFile(exactSource);
+        if (GifInspector.isGif(reusable)) {
+            module.debug("system share GIF reusable file hit: label=" + label
+                    + " bytes=" + reusable.length());
+            return new MaterializedImage(reusable, "gif-bilifix-cache");
+        }
+
+        File direct = directSourceFile(originalSource);
+        if (GifInspector.isGif(direct)) {
+            File copied = copyIntoShareCache(context, direct, label);
+            rememberSourceFiles(exactSource, copied);
+            module.info("system share GIF local source retained: label=" + label);
+            return new MaterializedImage(copied, "gif-local-file");
+        }
+
+        File cached = findCachedImage(originalSource);
+        if (GifInspector.isGif(cached)) {
+            File copied = copyIntoShareCache(context, cached, label);
+            rememberSourceFiles(exactSource, copied);
+            module.info("system share GIF origin cache retained: label=" + label
+                    + " bytes=" + copied.length());
+            return new MaterializedImage(copied, "gif-origin-cache");
+        }
+        if (isReadableImageCandidate(cached)) {
+            module.warn("system share GIF origin cache rejected: label=" + label
+                    + " mime=" + detectMime(cached)
+                    + " bytes=" + cached.length());
+        }
+
+        for (String source : gifDownloadSources(originalSource)) {
+            File downloaded;
+            try {
+                downloaded = downloadIntoShareCache(context, source, label);
+            } catch (Throwable throwable) {
+                module.warn("system share GIF download candidate failed: label=" + label
+                        + " source=" + describeSource(source)
+                        + " error=" + throwable.getClass().getSimpleName());
+                continue;
+            }
+            if (GifInspector.isGif(downloaded)) {
+                rememberSourceFiles(exactSource, downloaded);
+                module.info("system share GIF original retained: label=" + label
+                        + " source=" + describeSource(source)
+                        + " bytes=" + downloaded.length());
+                return new MaterializedImage(downloaded, "gif-network-origin");
+            }
+            if (isReadableImageCandidate(downloaded)) {
+                module.warn("system share GIF download rejected: label=" + label
+                        + " source=" + describeSource(source)
+                        + " mime=" + detectMime(downloaded)
+                        + " bytes=" + downloaded.length());
+            }
+            deleteQuietly(downloaded);
+        }
+        return null;
+    }
+
+    private static File directSourceFile(String source) {
+        if (source.startsWith("file://")) {
+            String path = Uri.parse(source).getPath();
+            return path == null ? null : new File(path);
+        }
+        return source.startsWith("/") ? new File(source) : null;
+    }
+
+    private static List<String> gifDownloadSources(String source) {
+        if (!source.startsWith("https://") && !source.startsWith("http://")) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        String secureSource = source.startsWith("http://")
+                ? "https://" + source.substring("http://".length()) : source;
+        candidates.add(stripGifTransform(secureSource));
+        candidates.add(secureSource);
+        candidates.add(stripGifTransform(source));
+        candidates.add(source);
+        return new ArrayList<>(candidates);
+    }
+
+    private static String stripGifTransform(String source) {
+        try {
+            Uri uri = Uri.parse(source);
+            String path = uri.getEncodedPath();
+            if (path == null) {
+                return source;
+            }
+            int marker = path.toLowerCase(java.util.Locale.ROOT).indexOf(".gif");
+            if (marker < 0) {
+                return source;
+            }
+            int gifEnd = marker + ".gif".length();
+            if (gifEnd >= path.length()) {
+                return source;
+            }
+            return uri.buildUpon().encodedPath(path.substring(0, gifEnd)).build().toString();
+        } catch (Throwable ignored) {
+            return source;
+        }
     }
 
     private File findCachedImage(String source) {
@@ -509,6 +644,9 @@ final class ImageShareManager {
     }
 
     private String detectMime(File file) {
+        if (GifInspector.isGif(file)) {
+            return "image/gif";
+        }
         try (InputStream input = new FileInputStream(file)) {
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inJustDecodeBounds = true;
