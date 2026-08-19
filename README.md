@@ -8,6 +8,7 @@
 > 自用模块，不保证其稳定性，欢迎各位大佬贡献！
 
 ### 如果本模块对你有所帮助，欢迎点个[Star](https://github.com/xiaojiuwo233/BiliFix)，十分感谢！
+### [关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)
 
 ## 兼容性
 
