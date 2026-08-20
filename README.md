@@ -1,6 +1,6 @@
 # BiliFix White
 
-针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。下载请查看本仓库最新pre-release
+针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。下载请查看本仓库最新[pre-release](https://github.com/xiaojiuwo233/BiliFix/releases/tag/b6.2.6-0.9.30)
 
 > 自用模块，不保证其稳定性，欢迎各位大佬贡献！
 
