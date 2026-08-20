@@ -53,8 +53,9 @@ public final class IpLocationHooks {
     private final Map<Object, RequestScope> mossCallScopes =
             Collections.synchronizedMap(new WeakHashMap<>());
     private final AtomicInteger requestLogCount = new AtomicInteger();
-    private final AtomicInteger metadataLogCount = new AtomicInteger();
     private final AtomicInteger transportLogCount = new AtomicInteger();
+    private final AtomicInteger transportRewriteLogCount = new AtomicInteger();
+    private final AtomicInteger transportRepairLogCount = new AtomicInteger();
     private final AtomicInteger commentHitLogCount = new AtomicInteger();
     private final AtomicInteger commentMissLogCount = new AtomicInteger();
     private final AtomicInteger profileLogCount = new AtomicInteger();
@@ -199,10 +200,101 @@ public final class IpLocationHooks {
 
         installMossSubgroup("gRPC final transport",
                 () -> installMossGrpcTransportScopes(descriptorName));
+        // Authoritative rewrite: the factory hooks above sit on tiny static methods that ART
+        // eventually inlines into their callers, silently bypassing them after the app has been
+        // running for a while. Rewriting the assembled header keeps working regardless.
+        installMossSubgroup("gRPC final header rewrite",
+                () -> installMossGrpcHeaderRewrites(metadata, device, fawkes));
         installMossOkHttpScopes();
         installMossSubgroup("OkHttp encoded header fallback",
                 () -> installEncodedMossHeaderHooks(
                         metadataFactoryClass, metadata, device, fawkes));
+    }
+
+    private void installMossGrpcHeaderRewrites(
+            ProtoIdentityRewriter metadata, ProtoIdentityRewriter device,
+            ProtoFawkesRewriter fawkes) throws Throwable {
+        Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
+        Class<?> headerKeyClass = module.load(classLoader, "io.grpc.n0$h");
+        Method headerGet = module.declaredMethod(headersClass, "g", headerKeyClass);
+        Method headerDiscard = module.declaredMethod(headersClass, "e", headerKeyClass);
+        Method headerPut = module.declaredMethod(
+                headersClass, "o", headerKeyClass, Object.class);
+        HeaderAccess access = new HeaderAccess(headerGet, headerDiscard, headerPut);
+
+        installMossGrpcHeaderRewrite("metadata/device", "of1.a", "c", headersClass, access,
+                new HeaderRewrite("a", "x-bili-metadata-bin", metadata),
+                new HeaderRewrite("c", "x-bili-device-bin", device));
+        installMossGrpcHeaderRewrite("Fawkes", "rf1.a", "d", headersClass, access,
+                new HeaderRewrite("a", "x-bili-fawkes-req-bin", fawkes));
+    }
+
+    private void installMossGrpcHeaderRewrite(
+            String part, String interceptorClassName, String populateMethodName,
+            Class<?> headersClass, HeaderAccess access, HeaderRewrite... rewrites)
+            throws Throwable {
+        Class<?> interceptorClass = module.load(classLoader, interceptorClassName);
+        Method populate = module.declaredMethod(
+                interceptorClass, populateMethodName, headersClass);
+        for (HeaderRewrite rewrite : rewrites) {
+            rewrite.keyField = module.declaredField(interceptorClass, rewrite.keyFieldName);
+        }
+        module.deoptimizeFeatureMethod(populate);
+
+        module.addHook("IP location Moss gRPC " + part + " header rewrite", populate,
+                hookChain -> {
+                    Object result = hookChain.proceed();
+                    RequestScope scope = requestScope.get();
+                    if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
+                            || !module.isIpLocationEnabled()) {
+                        return result;
+                    }
+                    Object headers = hookChain.getArg(0);
+                    Object interceptor = hookChain.getThisObject();
+                    if (headers == null || interceptor == null) {
+                        return result;
+                    }
+                    for (HeaderRewrite rewrite : rewrites) {
+                        try {
+                            rewriteTransportHeader(headers, interceptor, rewrite, access, scope);
+                        } catch (Throwable throwable) {
+                            module.error("IP location transport header rewrite failed: header="
+                                    + rewrite.headerName + " source=" + scope.source, throwable);
+                        }
+                    }
+                    return result;
+                });
+    }
+
+    private void rewriteTransportHeader(
+            Object headers, Object interceptor, HeaderRewrite rewrite,
+            HeaderAccess access, RequestScope scope) throws Throwable {
+        Object key = rewrite.keyField.get(interceptor);
+        if (key == null) {
+            return;
+        }
+        Object current = module.invoke(access.get, headers, key);
+        if (!(current instanceof byte[])) {
+            return;
+        }
+        ProtoRewriteResult rewritten = rewrite.rewriter.rewrite((byte[]) current);
+        boolean repaired = !rewritten.originalIdentity.equals(rewritten.rewrittenIdentity);
+        if (repaired) {
+            // Reaching here means the factory hook did not run for this request, which is the
+            // long-uptime failure mode this rewrite exists to cover.
+            if (shouldSample(transportRepairLogCount.incrementAndGet(), 10, 100)) {
+                module.warn("IP location transport header repaired: header="
+                        + rewrite.headerName + " source=" + scope.source
+                        + " oldIdentity=" + rewritten.originalIdentity
+                        + " newIdentity=" + rewritten.rewrittenIdentity);
+            }
+        } else if (shouldSample(transportRewriteLogCount.incrementAndGet(), 10, 200)) {
+            module.debug("IP location transport header already compatible: header="
+                    + rewrite.headerName + " source=" + scope.source
+                    + " identity=" + rewritten.rewrittenIdentity);
+        }
+        module.invoke(access.discard, headers, key);
+        module.invoke(access.put, headers, key, rewritten.bytes);
     }
 
     private void installEncodedMossHeaderHooks(
@@ -243,6 +335,9 @@ public final class IpLocationHooks {
 
     private void installProtoRewriteHook(
             String label, Method factory, ProtoRewriter rewriter) {
+        // Per-hook counter: a shared one makes a partially bypassed triplet look like a
+        // sampling artifact instead of the bug it is.
+        AtomicInteger logCount = new AtomicInteger();
         module.addHook(label, factory, hookChain -> {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
@@ -252,7 +347,7 @@ public final class IpLocationHooks {
             }
             try {
                 ProtoRewriteResult rewritten = rewriter.rewrite((byte[]) result);
-                if (shouldSample(metadataLogCount.incrementAndGet(), 30, 100)) {
+                if (shouldSample(logCount.incrementAndGet(), 30, 100)) {
                     module.debug(label + " rewritten: source=" + scope.source
                             + " oldIdentity=" + rewritten.originalIdentity
                             + " newIdentity=" + rewritten.rewrittenIdentity
@@ -270,6 +365,7 @@ public final class IpLocationHooks {
     private void installEncodedProtoRewriteHook(
             String label, Method factory, ProtoRewriter rewriter,
             Object codec, Method decodeHeader, Method encodeHeader) {
+        AtomicInteger logCount = new AtomicInteger();
         module.addHook(label, factory, hookChain -> {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
@@ -288,7 +384,7 @@ public final class IpLocationHooks {
                 if (!(encoded instanceof String)) {
                     throw new IllegalStateException("encode returned " + summarize(encoded));
                 }
-                if (shouldSample(metadataLogCount.incrementAndGet(), 30, 100)) {
+                if (shouldSample(logCount.incrementAndGet(), 30, 100)) {
                     module.debug(label + " rewritten: source=" + scope.source
                             + " oldIdentity=" + rewritten.originalIdentity
                             + " newIdentity=" + rewritten.rewrittenIdentity
@@ -782,6 +878,33 @@ public final class IpLocationHooks {
         private RequestScope(ScopeKind kind, String source) {
             this.kind = kind;
             this.source = source;
+        }
+    }
+
+    /** Resolved {@code io.grpc.Metadata} accessors used to patch assembled gRPC headers. */
+    private static final class HeaderAccess {
+        private final Method get;
+        private final Method discard;
+        private final Method put;
+
+        private HeaderAccess(Method get, Method discard, Method put) {
+            this.get = get;
+            this.discard = discard;
+            this.put = put;
+        }
+    }
+
+    /** Binds one interceptor header key field to the rewriter that owns its payload. */
+    private static final class HeaderRewrite {
+        private final String keyFieldName;
+        private final String headerName;
+        private final ProtoRewriter rewriter;
+        private Field keyField;
+
+        private HeaderRewrite(String keyFieldName, String headerName, ProtoRewriter rewriter) {
+            this.keyFieldName = keyFieldName;
+            this.headerName = headerName;
+            this.rewriter = rewriter;
         }
     }
 
