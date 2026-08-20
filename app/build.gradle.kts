@@ -55,7 +55,7 @@ android {
 
     defaultConfig {
         applicationId = "com.xjw.bilifix.in"
-        minSdk = 26
+        minSdk = 29
         targetSdk = 36
         versionCode = 28
         versionName = "0.9.30"

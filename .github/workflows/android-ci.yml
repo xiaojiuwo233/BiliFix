@@ -3,7 +3,6 @@ name: Android CI
 on:
   push:
     branches:
-      - main
       - "6.2.6"
   pull_request:
   workflow_dispatch:
