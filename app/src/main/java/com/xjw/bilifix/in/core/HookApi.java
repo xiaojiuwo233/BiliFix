@@ -4,6 +4,7 @@ import android.content.Context;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Executable;
 
 import io.github.libxposed.api.XposedInterface;
 
@@ -14,6 +15,8 @@ import io.github.libxposed.api.XposedInterface;
  * reflection, logging and setting dependencies remain explicit.</p>
  */
 public interface HookApi {
+    HostVersion hostVersion();
+
     void ensureFeatureSettings(Context context);
 
     boolean isArticleFixEnabled();
@@ -36,6 +39,14 @@ public interface HookApi {
 
     boolean isSystemShareEnabled();
 
+    boolean isModernLiveEnabled();
+
+    boolean isModernGameCenterEnabled();
+
+    boolean isModernMessageTopRightEnabled();
+
+    boolean isModernStoryEnabled();
+
     boolean deoptimizeFeatureMethod(Method method);
 
     Class<?> load(ClassLoader classLoader, String name) throws ClassNotFoundException;
@@ -51,6 +62,8 @@ public interface HookApi {
     Object invoke(Method method, Object receiver, Object... args) throws Throwable;
 
     void addHook(String label, Method method, XposedInterface.Hooker hooker);
+
+    void addHook(String label, Executable executable, XposedInterface.Hooker hooker);
 
     void debug(String message);
 

@@ -34,12 +34,13 @@ final class SettingsDeepLinkHooks {
                 "tv.danmaku.bili.ui.intent.IntentHandlerActivity");
         Class<?> settingsActivityClass = module.load(classLoader,
                 "com.bilibili.app.preferences.BiliPreferencesActivity");
-        Method dispatch = module.declaredMethod(
-                handlerClass, "y6", Intent.class, boolean.class);
-        Method showFragment = module.declaredMethod(settingsActivityClass, "Q6",
-                CharSequence.class, String.class, Bundle.class, boolean.class);
+        Method dispatch = resolveMethod(handlerClass,
+                new String[]{"t9", "y6"}, Intent.class, boolean.class);
+        Method showFragment = resolveMethod(settingsActivityClass,
+                new String[]{"I9", "Q6"}, CharSequence.class, String.class,
+                Bundle.class, boolean.class);
 
-        module.addHook("IntentHandlerActivity.y6 BiliFix settings", dispatch, chain -> {
+        module.addHook("IntentHandlerActivity BiliFix settings dispatch", dispatch, chain -> {
             Intent origin = (Intent) chain.getArg(0);
             if (!SettingsDeepLink.matches(origin)) {
                 return chain.proceed();
@@ -65,7 +66,7 @@ final class SettingsDeepLinkHooks {
             }
         });
 
-        module.addHook("BiliPreferencesActivity.Q6 BiliFix arguments",
+        module.addHook("BiliPreferencesActivity fragment BiliFix arguments",
                 showFragment, chain -> {
                     Object receiver = chain.getThisObject();
                     if (!(receiver instanceof Activity)) {
@@ -88,6 +89,25 @@ final class SettingsDeepLinkHooks {
                             + fragmentName);
                     return chain.proceed(arguments);
                 });
+    }
+
+    private Method resolveMethod(
+            Class<?> owner, String[] candidates, Class<?>... parameterTypes)
+            throws NoSuchMethodException {
+        NoSuchMethodException failure = null;
+        for (String name : candidates) {
+            try {
+                Method method = owner.getDeclaredMethod(name, parameterTypes);
+                method.setAccessible(true);
+                module.debug("resolved versioned method: " + method);
+                return method;
+            } catch (NoSuchMethodException exception) {
+                failure = exception;
+            }
+        }
+        throw failure == null
+                ? new NoSuchMethodException(owner.getName())
+                : failure;
     }
 
     private static String summarizeObject(Object value) {

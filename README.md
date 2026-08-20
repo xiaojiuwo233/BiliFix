@@ -1,18 +1,15 @@
 # BiliFix White
 
-[![Download](https://img.shields.io/github/downloads/Xposed-Modules-Repo/com.xjw.bilifix.in/total)](https://github.com/xiaojiuwo233/BiliFix/releases/latest)
-[![stars](https://img.shields.io/github/stars/xiaojiuwo233/BiliFix?label=Stars)](https://github.com/xiaojiuwo233/BiliFix)
-
-哔哩哔哩国际版（白版）已经停更并下架一段时间，app内部分功能已失效。本模块目的是修复一些当前无法正常的功能，同时增加一些本地化功能，满足日常使用。
+针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。下载请查看本仓库最新pre-release
 
 > 自用模块，不保证其稳定性，欢迎各位大佬贡献！
 
 ### 如果本模块对你有所帮助，欢迎点个[Star](https://github.com/xiaojiuwo233/BiliFix)，十分感谢！
-### [关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)
+### 请先阅读完整的[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)后再使用，此版本与旧版不兼容！
 
 ## 兼容性
 
-- 仅支持哔哩哔哩国际白版 `(com.bilibili.app.in)` 3.20.4
+- 仅支持哔哩哔哩国际版 `(com.bilibili.app.in)` 6.2.6
 - Xposed API 101 或更高版本
 
 ## 功能
@@ -21,28 +18,23 @@
 
 ### 修复
 
-- 修复新版专栏无法在国际版正常查看的问题
-- 修复动态无法显示专栏投稿相关内容
-- 修复分区页加载失败
-- 修复粉丝与关注列表显示未登录
-- 修复钱包页加载失败
+- 恢复直播Tab
+- 恢复竖屏模式入口
+- 游戏中心入口
 
 ### 增强
 
-- 为部分图片分享菜单 添加系统分享按钮
-- 评论区和用户主页显示用户 IP 属地
-- 获取由b站自动生成的视频字幕资源（自动生成与自动翻译）
-- 评论AI翻译（实验性功能）
+- 消息按钮移动到首页
+- 显示IP属地
 
 ## 已知问题
 
-- 新版专栏下 评论区图片无法正常显示（可进入评论详情查看）
-- 部分用户首次进入专栏可能会提示错误，重进即可恢复
+- 模块功能目前不完善，可能会出现闪退/功能无效等问题，请斟酌后使用
 
 ## 反馈
 
 如果你在使用过程中遇到问题，欢迎在[issue](https://github.com/xiaojiuwo233/BiliFix/issues/new)中提出。
-注意，发送前务必包含必要的复现步骤和日志，否则issue将会被关闭。
+注意，发送前务必包含必要的复现步骤和日志，否则issue将会被关闭。**此版本维护优先级较低，可能不会及时处理，反馈时请注明版本号**
 
 ## 许可证
 
