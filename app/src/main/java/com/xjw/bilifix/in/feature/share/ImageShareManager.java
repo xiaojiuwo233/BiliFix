@@ -19,6 +19,7 @@ import android.widget.ImageView;
 import android.widget.Toast;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.io.Closeable;
 import java.io.File;
@@ -846,16 +847,7 @@ final class ImageShareManager {
 
 
     private Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method current = activityThread.getDeclaredMethod("currentApplication");
-            current.setAccessible(true);
-            Object value = current.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable throwable) {
-            module.debug("system share current application unavailable: " + throwable);
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private static final class MaterializedImage {

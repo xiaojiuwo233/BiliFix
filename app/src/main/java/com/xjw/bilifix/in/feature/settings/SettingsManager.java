@@ -41,6 +41,8 @@ public final class SettingsManager {
             "bilifix_ai_comment_translation_enabled";
     static final String KEY_SYSTEM_SHARE_ENABLED =
             "bilifix_system_share_enabled";
+    static final String KEY_VERBOSE_LOGGING_ENABLED =
+            "bilifix_verbose_logging_enabled";
     static final String KEY_SETTINGS_ENTRY = "bilifix_settings_entry";
     static final String KEY_ABOUT = "bilifix_about";
     static final String ARG_BILIFIX_SETTINGS_PAGE = "bilifix_settings_page";
@@ -55,15 +57,7 @@ public final class SettingsManager {
     private final AtomicBoolean storageLogged = new AtomicBoolean(false);
 
     private volatile boolean loaded;
-    private volatile boolean articleFixEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean dynamicArticleFixEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean regionFixEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean relationFixEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean walletFixEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean ipLocationEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean aiSubtitleEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean aiCommentTranslationEnabled = DEFAULT_FEATURE_ENABLED;
-    private volatile boolean systemShareEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile Snapshot state = Snapshot.defaults();
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
@@ -71,21 +65,7 @@ public final class SettingsManager {
             if (intent == null || !SETTINGS_CHANGED_ACTION.equals(intent.getAction())) {
                 return;
             }
-            apply(
-                    intent.getBooleanExtra(KEY_ARTICLE_FIX_ENABLED, articleFixEnabled),
-                    intent.getBooleanExtra(
-                            KEY_DYNAMIC_ARTICLE_FIX_ENABLED,
-                            dynamicArticleFixEnabled),
-                    intent.getBooleanExtra(KEY_REGION_FIX_ENABLED, regionFixEnabled),
-                    intent.getBooleanExtra(KEY_RELATION_FIX_ENABLED, relationFixEnabled),
-                    intent.getBooleanExtra(KEY_WALLET_FIX_ENABLED, walletFixEnabled),
-                    intent.getBooleanExtra(KEY_IP_LOCATION_ENABLED, ipLocationEnabled),
-                    intent.getBooleanExtra(KEY_AI_SUBTITLE_ENABLED, aiSubtitleEnabled),
-                    intent.getBooleanExtra(
-                            KEY_AI_COMMENT_TRANSLATION_ENABLED,
-                            aiCommentTranslationEnabled),
-                    intent.getBooleanExtra(KEY_SYSTEM_SHARE_ENABLED, systemShareEnabled),
-                    "broadcast");
+            apply(Snapshot.fromBroadcast(intent, state), "broadcast");
         }
     };
 
@@ -101,15 +81,7 @@ public final class SettingsManager {
     boolean persist(Context context, String key, boolean value) {
         try {
             SharedPreferences preferences = preferences(context);
-            boolean articleEnabled;
-            boolean dynamicArticleEnabled;
-            boolean regionEnabled;
-            boolean relationEnabled;
-            boolean walletEnabled;
-            boolean ipLocationEnabled;
-            boolean aiSubtitleEnabled;
-            boolean aiCommentTranslationEnabled;
-            boolean shareEnabled;
+            Snapshot snapshot;
             // The write, the read-back and the publish must be atomic against ensureLoaded(),
             // which would otherwise republish the snapshot it captured before this write.
             synchronized (stateLock) {
@@ -121,43 +93,12 @@ public final class SettingsManager {
                 // apply() keeps the settings switch off the main thread's disk write path; the
                 // in-memory state below is what every feature hook actually reads.
                 editor.apply();
-                articleEnabled = preferences.getBoolean(
-                        KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-                dynamicArticleEnabled = preferences.getBoolean(
-                        KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-                regionEnabled = preferences.getBoolean(
-                        KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-                relationEnabled = preferences.getBoolean(
-                        KEY_RELATION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-                walletEnabled = preferences.getBoolean(
-                        KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED);
-                ipLocationEnabled = preferences.getBoolean(
-                        KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED);
-                aiSubtitleEnabled = preferences.getBoolean(
-                        KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED);
-                aiCommentTranslationEnabled = preferences.getBoolean(
-                        KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED);
-                shareEnabled = preferences.getBoolean(
-                        KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED);
-                applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled,
-                        relationEnabled, walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
-                        aiCommentTranslationEnabled, shareEnabled, "settings-page");
+                snapshot = Snapshot.fromPreferences(preferences);
+                applyLocked(snapshot, "settings-page");
             }
 
-            Intent update = new Intent(SETTINGS_CHANGED_ACTION)
-                    .setPackage(TARGET_PACKAGE)
-                    .putExtra(KEY_ARTICLE_FIX_ENABLED, articleEnabled)
-                    .putExtra(KEY_DYNAMIC_ARTICLE_FIX_ENABLED, dynamicArticleEnabled)
-                    .putExtra(KEY_IMAGE_PREVIEW_ENABLED, articleEnabled)
-                    .putExtra(KEY_REGION_FIX_ENABLED, regionEnabled)
-                    .putExtra(KEY_RELATION_FIX_ENABLED, relationEnabled)
-                    .putExtra(KEY_WALLET_FIX_ENABLED, walletEnabled)
-                    .putExtra(KEY_IP_LOCATION_ENABLED, ipLocationEnabled)
-                    .putExtra(KEY_AI_SUBTITLE_ENABLED, aiSubtitleEnabled)
-                    .putExtra(
-                            KEY_AI_COMMENT_TRANSLATION_ENABLED,
-                            aiCommentTranslationEnabled)
-                    .putExtra(KEY_SYSTEM_SHARE_ENABLED, shareEnabled);
+            Intent update = new Intent(SETTINGS_CHANGED_ACTION).setPackage(TARGET_PACKAGE);
+            snapshot.putExtras(update);
             context.sendBroadcast(update);
             module.info("setting persisted: key=" + key + " value=" + value
                     + " broadcast=true");
@@ -185,28 +126,7 @@ public final class SettingsManager {
             if (loaded) {
                 return;
             }
-            SharedPreferences preferences = preferences(context);
-            apply(
-                    preferences.getBoolean(
-                            KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_RELATION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_AI_COMMENT_TRANSLATION_ENABLED,
-                            DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(
-                            KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    "shared-preferences");
+            apply(Snapshot.fromPreferences(preferences(context)), "shared-preferences");
         }
     }
 
@@ -224,76 +144,21 @@ public final class SettingsManager {
         return preferences;
     }
 
-    /**
-     * Publishes a complete setting snapshot. Callers that read the snapshot from storage must
-     * hold {@code stateLock} across both the read and this call, otherwise a concurrent write
-     * can be overwritten by an older snapshot.
-     */
-    private void apply(
-            boolean articleEnabled,
-            boolean dynamicArticleEnabled,
-            boolean regionEnabled,
-            boolean relationEnabled,
-            boolean walletEnabled,
-            boolean ipLocationEnabled,
-            boolean aiSubtitleEnabled,
-            boolean aiCommentTranslationEnabled,
-            boolean shareEnabled,
-            String source) {
+
+    private void apply(Snapshot snapshot, String source) {
         synchronized (stateLock) {
-            applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled, relationEnabled,
-                    walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
-                    aiCommentTranslationEnabled, shareEnabled, source);
+            applyLocked(snapshot, source);
         }
     }
 
-    private void applyLocked(
-            boolean articleEnabled,
-            boolean dynamicArticleEnabled,
-            boolean regionEnabled,
-            boolean relationEnabled,
-            boolean walletEnabled,
-            boolean ipLocationEnabled,
-            boolean aiSubtitleEnabled,
-            boolean aiCommentTranslationEnabled,
-            boolean shareEnabled,
-            String source) {
-        boolean changed = !loaded
-                || articleFixEnabled != articleEnabled
-                || dynamicArticleFixEnabled != dynamicArticleEnabled
-                || regionFixEnabled != regionEnabled
-                || relationFixEnabled != relationEnabled
-                || walletFixEnabled != walletEnabled
-                || this.ipLocationEnabled != ipLocationEnabled
-                || this.aiSubtitleEnabled != aiSubtitleEnabled
-                || this.aiCommentTranslationEnabled != aiCommentTranslationEnabled
-                || systemShareEnabled != shareEnabled;
-        articleFixEnabled = articleEnabled;
-        dynamicArticleFixEnabled = dynamicArticleEnabled;
-        regionFixEnabled = regionEnabled;
-        relationFixEnabled = relationEnabled;
-        walletFixEnabled = walletEnabled;
-        this.ipLocationEnabled = ipLocationEnabled;
-        this.aiSubtitleEnabled = aiSubtitleEnabled;
-        this.aiCommentTranslationEnabled = aiCommentTranslationEnabled;
-        systemShareEnabled = shareEnabled;
+    private void applyLocked(Snapshot snapshot, String source) {
+        boolean changed = !loaded || !state.sameAs(snapshot);
+        state = snapshot;
         loaded = true;
-        String message = "settings " + (changed ? "applied" : "unchanged")
-                + ": source=" + source
-                + " articleFix=" + articleEnabled
-                + " dynamicArticleFix=" + dynamicArticleEnabled
-                + " imagePreview=" + articleEnabled
-                + " regionFix=" + regionEnabled
-                + " relationFix=" + relationEnabled
-                + " walletFix=" + walletEnabled
-                + " ipLocation=" + ipLocationEnabled
-                + " aiSubtitle=" + aiSubtitleEnabled
-                + " aiCommentTranslation=" + aiCommentTranslationEnabled
-                + " systemShare=" + shareEnabled;
         if (changed) {
-            module.info(message);
-        } else {
-            module.debug(message);
+            module.info("settings applied: source=" + source + " " + snapshot);
+        } else if (module.isVerboseLoggingEnabled()) {
+            module.debug("settings unchanged: source=" + source + " " + snapshot);
         }
     }
 
@@ -322,43 +187,183 @@ public final class SettingsManager {
     }
 
     public boolean isArticleFixEnabled() {
-        return articleFixEnabled;
+        return state.articleFix;
     }
 
     public boolean isDynamicArticleFixEnabled() {
-        return dynamicArticleFixEnabled;
+        return state.dynamicArticleFix;
     }
 
     public boolean isImagePreviewEnabled() {
-        return articleFixEnabled;
+        return state.articleFix;
     }
 
     public boolean isRegionFixEnabled() {
-        return regionFixEnabled;
+        return state.regionFix;
     }
 
     public boolean isRelationFixEnabled() {
-        return relationFixEnabled;
+        return state.relationFix;
     }
 
     public boolean isWalletFixEnabled() {
-        return walletFixEnabled;
+        return state.walletFix;
     }
 
     public boolean isIpLocationEnabled() {
-        return ipLocationEnabled;
+        return state.ipLocation;
     }
 
     public boolean isAiSubtitleEnabled() {
-        return aiSubtitleEnabled;
+        return state.aiSubtitle;
     }
 
     public boolean isAiCommentTranslationEnabled() {
-        return aiCommentTranslationEnabled;
+        return state.aiCommentTranslation;
     }
 
     public boolean isSystemShareEnabled() {
-        return systemShareEnabled;
+        return state.systemShare;
     }
 
+    public boolean isVerboseLoggingEnabled() {
+        return state.verboseLogging;
+    }
+
+
+    private static final class Snapshot {
+        final boolean articleFix;
+        final boolean dynamicArticleFix;
+        final boolean regionFix;
+        final boolean relationFix;
+        final boolean walletFix;
+        final boolean ipLocation;
+        final boolean aiSubtitle;
+        final boolean aiCommentTranslation;
+        final boolean systemShare;
+        final boolean verboseLogging;
+
+        Snapshot(
+                boolean articleFix,
+                boolean dynamicArticleFix,
+                boolean regionFix,
+                boolean relationFix,
+                boolean walletFix,
+                boolean ipLocation,
+                boolean aiSubtitle,
+                boolean aiCommentTranslation,
+                boolean systemShare,
+                boolean verboseLogging) {
+            this.articleFix = articleFix;
+            this.dynamicArticleFix = dynamicArticleFix;
+            this.regionFix = regionFix;
+            this.relationFix = relationFix;
+            this.walletFix = walletFix;
+            this.ipLocation = ipLocation;
+            this.aiSubtitle = aiSubtitle;
+            this.aiCommentTranslation = aiCommentTranslation;
+            this.systemShare = systemShare;
+            this.verboseLogging = verboseLogging;
+        }
+
+        static Snapshot defaults() {
+            return new Snapshot(
+                    DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
+                    DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
+                    DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
+                    DEFAULT_FEATURE_ENABLED);
+        }
+
+        static Snapshot fromPreferences(SharedPreferences preferences) {
+            return new Snapshot(
+                    preferences.getBoolean(
+                            KEY_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_DYNAMIC_ARTICLE_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_REGION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_RELATION_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_VERBOSE_LOGGING_ENABLED, DEFAULT_FEATURE_ENABLED));
+        }
+
+        /** Values absent from the broadcast fall back to {@code fallback}, never to the default. */
+        static Snapshot fromBroadcast(Intent intent, Snapshot fallback) {
+            return new Snapshot(
+                    intent.getBooleanExtra(
+                            KEY_ARTICLE_FIX_ENABLED, fallback.articleFix),
+                    intent.getBooleanExtra(
+                            KEY_DYNAMIC_ARTICLE_FIX_ENABLED, fallback.dynamicArticleFix),
+                    intent.getBooleanExtra(
+                            KEY_REGION_FIX_ENABLED, fallback.regionFix),
+                    intent.getBooleanExtra(
+                            KEY_RELATION_FIX_ENABLED, fallback.relationFix),
+                    intent.getBooleanExtra(
+                            KEY_WALLET_FIX_ENABLED, fallback.walletFix),
+                    intent.getBooleanExtra(
+                            KEY_IP_LOCATION_ENABLED, fallback.ipLocation),
+                    intent.getBooleanExtra(
+                            KEY_AI_SUBTITLE_ENABLED, fallback.aiSubtitle),
+                    intent.getBooleanExtra(
+                            KEY_AI_COMMENT_TRANSLATION_ENABLED, fallback.aiCommentTranslation),
+                    intent.getBooleanExtra(
+                            KEY_SYSTEM_SHARE_ENABLED, fallback.systemShare),
+                    intent.getBooleanExtra(
+                            KEY_VERBOSE_LOGGING_ENABLED, fallback.verboseLogging));
+        }
+
+        void putExtras(Intent intent) {
+            intent.putExtra(KEY_ARTICLE_FIX_ENABLED, articleFix)
+                    .putExtra(KEY_DYNAMIC_ARTICLE_FIX_ENABLED, dynamicArticleFix)
+                    // Compatibility with 0.3.x: image preview follows the article repair switch.
+                    .putExtra(KEY_IMAGE_PREVIEW_ENABLED, articleFix)
+                    .putExtra(KEY_REGION_FIX_ENABLED, regionFix)
+                    .putExtra(KEY_RELATION_FIX_ENABLED, relationFix)
+                    .putExtra(KEY_WALLET_FIX_ENABLED, walletFix)
+                    .putExtra(KEY_IP_LOCATION_ENABLED, ipLocation)
+                    .putExtra(KEY_AI_SUBTITLE_ENABLED, aiSubtitle)
+                    .putExtra(KEY_AI_COMMENT_TRANSLATION_ENABLED, aiCommentTranslation)
+                    .putExtra(KEY_SYSTEM_SHARE_ENABLED, systemShare)
+                    .putExtra(KEY_VERBOSE_LOGGING_ENABLED, verboseLogging);
+        }
+
+        boolean sameAs(Snapshot other) {
+            return articleFix == other.articleFix
+                    && dynamicArticleFix == other.dynamicArticleFix
+                    && regionFix == other.regionFix
+                    && relationFix == other.relationFix
+                    && walletFix == other.walletFix
+                    && ipLocation == other.ipLocation
+                    && aiSubtitle == other.aiSubtitle
+                    && aiCommentTranslation == other.aiCommentTranslation
+                    && systemShare == other.systemShare
+                    && verboseLogging == other.verboseLogging;
+        }
+
+        @Override
+        public String toString() {
+            return "articleFix=" + articleFix
+                    + " dynamicArticleFix=" + dynamicArticleFix
+                    + " imagePreview=" + articleFix
+                    + " regionFix=" + regionFix
+                    + " relationFix=" + relationFix
+                    + " walletFix=" + walletFix
+                    + " ipLocation=" + ipLocation
+                    + " aiSubtitle=" + aiSubtitle
+                    + " aiCommentTranslation=" + aiCommentTranslation
+                    + " systemShare=" + systemShare
+                    + " verboseLogging=" + verboseLogging;
+        }
+    }
 }

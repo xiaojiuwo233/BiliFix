@@ -3,6 +3,7 @@ package com.xjw.bilifix.in.feature.subtitle;
 import android.content.Context;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -147,14 +148,6 @@ final class SubtitleFileCompat {
     }
 
     private static Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object value = currentApplication.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 }

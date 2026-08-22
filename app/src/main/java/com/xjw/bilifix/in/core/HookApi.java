@@ -36,6 +36,8 @@ public interface HookApi {
 
     boolean isSystemShareEnabled();
 
+    boolean isVerboseLoggingEnabled();
+
     boolean deoptimizeFeatureMethod(Method method);
 
     Class<?> load(ClassLoader classLoader, String name) throws ClassNotFoundException;

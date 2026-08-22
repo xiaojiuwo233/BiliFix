@@ -179,7 +179,9 @@ public final class ArticleHooks {
                 ensureSettingsLoaded(activity);
                 long cvid = getCvid(activity);
                 Integer type = articleTypes.get(cvid);
-                info("column resumed: cvid=" + cvid + " cachedType=" + type);
+                if (verbose()) {
+                    debug("column resumed: cvid=" + cvid + " cachedType=" + type);
+                }
                 return result;
             });
 
@@ -686,7 +688,9 @@ public final class ArticleHooks {
                         + " dynType=" + invoke(requestGetDynType, request));
                 try {
                     Object result = chain.proceed();
-                    debug("Opus gRPC initial return: " + summarizeObject(result));
+                    if (verbose()) {
+                        debug("Opus gRPC initial return: " + summarizeObject(result));
+                    }
                     return result;
                 } catch (Throwable throwable) {
                     error("Opus gRPC call threw before suspension", throwable);
@@ -698,12 +702,12 @@ public final class ArticleHooks {
                 Object coroutine = chain.getThisObject();
                 int label = coroutineLabel.getInt(coroutine);
                 Object value = chain.getArg(0);
-                if (label == 1) {
-                    info("Opus gRPC resumed: " + summarizeObject(value));
+                if (label == 1 && verbose()) {
+                    debug("Opus gRPC resumed: " + summarizeObject(value));
                 }
                 try {
                     Object result = chain.proceed();
-                    if (label == 1) {
+                    if (label == 1 && verbose()) {
                         debug("Opus gRPC result consumed: " + summarizeObject(result));
                     }
                     return result;
@@ -1274,6 +1278,10 @@ public final class ArticleHooks {
 
     private void debug(String message) {
         module.debug(message);
+    }
+
+    private boolean verbose() {
+        return module.isVerboseLoggingEnabled();
     }
 
     private void info(String message) {

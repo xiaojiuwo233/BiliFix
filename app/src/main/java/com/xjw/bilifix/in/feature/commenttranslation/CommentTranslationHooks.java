@@ -460,12 +460,16 @@ public final class CommentTranslationHooks {
                             capture.originalRendered = immutableOriginal(
                                     (CharSequence) value, capture.rawText);
                             capture.setterCaptured = true;
-                            module.debug("comment original text captured: rpid="
-                                    + capture.rpid
-                                    + " view=" + viewIdentity(capture.view)
-                                    + " text=" + textFingerprint(
-                                            capture.originalRendered)
-                                    + " setter=" + label);
+                            // Guarded at the call site: this sits on setText, which runs even
+                            // more often than the row binding itself.
+                            if (module.isVerboseLoggingEnabled()) {
+                                module.debug("comment original text captured: rpid="
+                                        + capture.rpid
+                                        + " view=" + viewIdentity(capture.view)
+                                        + " text=" + textFingerprint(
+                                                capture.originalRendered)
+                                        + " setter=" + label);
+                            }
                         }
                     }
                     return chain.proceed();
@@ -548,13 +552,17 @@ public final class CommentTranslationHooks {
                                 && translatedText != null
                                 && !translatedText.isEmpty();
                         viewDisplayStates.put(textView, displayState);
-                        module.debug("comment view bound: rpid=" + rpid
-                                + " view=" + viewIdentity(textView)
-                                + " previousRpid="
-                                + (previous == null ? "none" : previous.rpid)
-                                + " original=" + textFingerprint(original)
-                                + " source="
-                                + (capture.setterCaptured ? "setter" : "raw"));
+                        // Guarded at the call site: textFingerprint() walks the whole comment
+                        // body, and this runs for every bound row while the list scrolls.
+                        if (module.isVerboseLoggingEnabled()) {
+                            module.debug("comment view bound: rpid=" + rpid
+                                    + " view=" + viewIdentity(textView)
+                                    + " previousRpid="
+                                    + (previous == null ? "none" : previous.rpid)
+                                    + " original=" + textFingerprint(original)
+                                    + " source="
+                                    + (capture.setterCaptured ? "setter" : "raw"));
+                        }
                         if (module.isAiCommentTranslationEnabled()
                                 && displayState.showingTranslation) {
                             setDisplayText(textView, state.translatedText);
@@ -907,9 +915,11 @@ public final class CommentTranslationHooks {
             CharSequence original = immutableOriginal(null, rawText);
             ViewDisplayState created = new ViewDisplayState(rpid, original);
             viewDisplayStates.put(view, created);
-            module.debug("comment view state recreated from model: rpid=" + rpid
-                    + " view=" + viewIdentity(view)
-                    + " original=" + textFingerprint(original));
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("comment view state recreated from model: rpid=" + rpid
+                        + " view=" + viewIdentity(view)
+                        + " original=" + textFingerprint(original));
+            }
             return created;
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Supplies a compatible request identity needed by the host's existing IP location UI. */
@@ -60,6 +62,7 @@ public final class IpLocationHooks {
     private final AtomicInteger commentMissLogCount = new AtomicInteger();
     private final AtomicInteger profileLogCount = new AtomicInteger();
     private final AtomicInteger mainListLogCount = new AtomicInteger();
+    private final AtomicBoolean diagnosticsInstalled = new AtomicBoolean(false);
 
     public IpLocationHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
@@ -69,6 +72,16 @@ public final class IpLocationHooks {
     public void install() {
         installGroup("profile and REST comment request identity", this::installRestIdentityHooks);
         installGroup("Moss comment request identity", this::installMossIdentityHooks);
+    }
+
+    public void installDiagnostics() {
+        if (!diagnosticsInstalled.compareAndSet(false, true)) {
+            return;
+        }
+        if (!module.isVerboseLoggingEnabled()) {
+            module.info("IP location diagnostics skipped: verboseLogging=false");
+            return;
+        }
         installGroup("MainList pagination diagnostics", this::installMainListDiagnostics);
         installGroup("comment response diagnostics", this::installCommentDiagnostics);
         installGroup("profile bottom-tag diagnostics", this::installProfileBottomTagDiagnostics);
@@ -803,15 +816,7 @@ public final class IpLocationHooks {
     }
 
     private Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object value = currentApplication.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private void installGroup(String label, ThrowingAction action) {

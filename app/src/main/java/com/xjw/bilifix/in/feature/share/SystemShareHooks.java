@@ -12,6 +12,7 @@ import android.view.Window;
 import android.widget.ImageView;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
@@ -503,15 +504,7 @@ public final class SystemShareHooks {
     }
 
     private Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object value = currentApplication.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private Object newMenuItem(Context context) throws Throwable {

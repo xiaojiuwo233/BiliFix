@@ -19,6 +19,7 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 import com.xjw.bilifix.in.feature.article.ArticleHooks;
 import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
 import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
@@ -34,10 +35,12 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private final AtomicBoolean hooksInstalled = new AtomicBoolean(false);
     private final AtomicBoolean postPackageInitializationScheduled =
             new AtomicBoolean(false);
+    private final AtomicBoolean runtimeStateLogged = new AtomicBoolean(false);
     private final SettingsManager settingsManager = new SettingsManager(this);
     private final List<XposedInterface.HookHandle> hookHandles = new ArrayList<>();
     private volatile Handler mainHandler;
     private volatile SystemShareHooks systemShareHooks;
+    private volatile IpLocationHooks ipLocationHooks;
 
     private volatile String processName = "unknown";
 
@@ -45,7 +48,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     public void onModuleLoaded(ModuleLoadedParam param) {
         processName = param.getProcessName();
         mainHandler = new Handler(Looper.getMainLooper());
-        info("module loaded: process=" + processName
+        info("module loaded: version=" + BuildConfig.VERSION_NAME
+                + " versionCode=" + BuildConfig.VERSION_CODE
+                + " process=" + processName
                 + " framework=" + getFrameworkName()
                 + " frameworkVersion=" + getFrameworkVersion()
                 + " api=" + getApiVersion());
@@ -75,17 +80,19 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         installApplicationSettingsHook(classLoader);
         new WebViewThemeHooks(this, classLoader).install();
         new CompatFeatureHooks(this, classLoader).install();
+        IpLocationHooks locationHooks = new IpLocationHooks(this, classLoader);
+        ipLocationHooks = locationHooks;
         if (mainProcess) {
             new DynamicArticleIdentityHooks(this, classLoader).install();
             new CommentTranslationHooks(this, classLoader).install();
             new AiSubtitleHooks(this, classLoader).install();
-            new IpLocationHooks(this, classLoader).install();
+            locationHooks.install();
             settingsManager.installUiHooks(classLoader);
             SystemShareHooks shareHooks = new SystemShareHooks(this, classLoader);
             systemShareHooks = shareHooks;
             shareHooks.install();
         } else {
-            new IpLocationHooks(this, classLoader).install();
+            locationHooks.install();
             new ArticleHooks(this, classLoader).install();
         }
 
@@ -107,6 +114,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                     ensureSettingsLoaded(context);
                     info("settings initialized from application onCreate");
                 }
+                installDiagnosticHooks();
                 SystemShareHooks shareHooks = systemShareHooks;
                 if (shareHooks != null) {
                     mainHandler.post(shareHooks::installDeferredCommentHooks);
@@ -117,27 +125,15 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     private boolean initializeCurrentApplication(String source, boolean reportNotReady) {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object application = currentApplication.invoke(null);
-            if (application instanceof Context) {
-                Context context = (Context) application;
-                registerSettingsReceiver(context);
-                ensureSettingsLoaded(context);
-                info("settings initialized from current application: source=" + source);
-                return true;
-            } else {
-                if (reportNotReady) {
-                    debug("current application not ready: source=" + source);
-                }
-            }
-        } catch (Throwable throwable) {
-            if (reportNotReady) {
-                debug("current application lookup failed: source=" + source
-                        + " error=" + throwable);
-            }
+        Context context = HostApplication.get();
+        if (context != null) {
+            registerSettingsReceiver(context);
+            ensureSettingsLoaded(context);
+            info("settings initialized from current application: source=" + source);
+            return true;
+        }
+        if (reportNotReady) {
+            debug("current application not ready: source=" + source);
         }
         return false;
     }
@@ -167,10 +163,28 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             warn("settings post-package initialization timed out; "
                     + "next feature context will retry");
         }
+        installDiagnosticHooks();
         SystemShareHooks shareHooks = systemShareHooks;
         if (shareHooks != null) {
             shareHooks.installDeferredCommentHooks();
         }
+    }
+
+    private void installDiagnosticHooks() {
+        logRuntimeState();
+        IpLocationHooks locationHooks = ipLocationHooks;
+        if (locationHooks != null) {
+            locationHooks.installDiagnostics();
+        }
+    }
+
+    private void logRuntimeState() {
+        if (!runtimeStateLogged.compareAndSet(false, true)) {
+            return;
+        }
+        info("module runtime state: version=" + BuildConfig.VERSION_NAME
+                + " process=" + processName
+                + " verboseLogging=" + settingsManager.isVerboseLoggingEnabled());
     }
 
     @Override
@@ -234,6 +248,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public boolean isSystemShareEnabled() {
         return settingsManager.isSystemShareEnabled();
+    }
+
+    @Override
+    public boolean isVerboseLoggingEnabled() {
+        return settingsManager.isVerboseLoggingEnabled();
     }
 
     @Override
@@ -324,6 +343,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     private void writeLog(int priority, String message, Throwable throwable) {
+        if (priority == Log.DEBUG && !settingsManager.isVerboseLoggingEnabled()) {
+            return;
+        }
         String processMessage = "[" + processName + "] " + message;
         if (throwable == null) {
             Log.println(priority, TAG, processMessage);

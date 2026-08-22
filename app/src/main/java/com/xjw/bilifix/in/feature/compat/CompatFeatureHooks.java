@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.net.Uri;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -389,15 +390,7 @@ public final class CompatFeatureHooks {
     }
 
     private Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object value = currentApplication.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private TargetPage classify(Uri uri) {

@@ -14,6 +14,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SYSTEM_SHARE_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_VERBOSE_LOGGING_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_WALLET_FIX_ENABLED;
 
 import android.app.Activity;
@@ -277,9 +278,23 @@ final class SettingsUiHooks {
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
 
+                        Object debugCategory = createCategory(
+                                context, categoryConstructor, categoryTitleLayout,
+                                "调试", 2, setTitle, setLayoutResource, setOrder);
+                        module.invoke(addPreference, screen, debugCategory);
+                        addSwitch(debugCategory, switchConstructor,
+                                KEY_VERBOSE_LOGGING_ENABLED,
+                                "详细日志",
+                                "输出调试日志，会影响性能，反馈问题时务必开启，重启应用后生效",
+                                settings.isVerboseLoggingEnabled(), 0,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
+
                         Object aboutCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
-                                "关于", 2, setTitle, setLayoutResource, setOrder);
+                                "关于", 3, setTitle, setLayoutResource, setOrder);
                         module.invoke(addPreference, screen, aboutCategory);
                         Object about = entryConstructor.newInstance(context);
                         module.invoke(setKey, about, KEY_ABOUT);
@@ -304,7 +319,8 @@ final class SettingsUiHooks {
                                 + " aiSubtitle=" + settings.isAiSubtitleEnabled()
                                 + " aiCommentTranslation="
                                 + settings.isAiCommentTranslationEnabled()
-                                + " systemShare=" + settings.isSystemShareEnabled());
+                                + " systemShare=" + settings.isSystemShareEnabled()
+                                + " verboseLogging=" + settings.isVerboseLoggingEnabled());
                         return null;
                     } catch (Throwable throwable) {
                         module.error("BiliFix settings page creation failed", throwable);
