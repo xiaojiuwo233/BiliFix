@@ -40,6 +40,7 @@ public final class DynamicArticleIdentityHooks {
             Collections.synchronizedMap(new WeakHashMap<>());
     private final AtomicInteger requestLogCount = new AtomicInteger();
     private final AtomicInteger identityLogCount = new AtomicInteger();
+    private final AtomicInteger followingResponseLogCount = new AtomicInteger();
 
     public DynamicArticleIdentityHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
@@ -48,7 +49,104 @@ public final class DynamicArticleIdentityHooks {
 
     public void install() {
         installGroup("dynamic read request identity", this::installMossIdentityHooks);
+        installGroup("following feed DynAll entry", this::installFollowingFeedEntryHook);
+        installGroup("following feed load scope", this::installFollowingFeedLoadScope);
+        installGroup("following feed response diagnostics",
+                this::installFollowingFeedDiagnostics);
         installGroup("DynSpace response diagnostics", this::installSpaceDiagnostics);
+    }
+
+    private void installFollowingFeedEntryHook() throws Throwable {
+        Class<?> mossClass = module.load(
+                classLoader, "com.bapis.bilibili.app.dynamic.v2.DynamicMoss");
+        Class<?> requestClass = module.load(
+                classLoader, "com.bapis.bilibili.app.dynamic.v2.DynAllReq");
+        Class<?> continuationClass = module.load(classLoader, "kotlin.coroutines.c");
+        Class<?> serviceKtxClass = module.load(
+                classLoader, "com.bapis.bilibili.app.dynamic.v2.DynamicMossKtxKt");
+        Method suspendDynAll = module.declaredMethod(
+                serviceKtxClass, "suspendDynAll",
+                mossClass, requestClass, continuationClass);
+        module.deoptimizeFeatureMethod(suspendDynAll);
+
+        module.addHook("Dynamic article following suspendDynAll", suspendDynAll,
+                hookChain -> withFollowingFeedScope(
+                        "following DynamicMossKtxKt.suspendDynAll",
+                        true, hookChain::proceed));
+    }
+
+    private void installFollowingFeedLoadScope() throws Throwable {
+        Class<?> modelClass = module.load(classLoader,
+                "com.bilibili.bplus.followinglist.home.synthesis.model."
+                        + "SynthesisTabLoadModel");
+        Class<?> continuationClass = module.load(classLoader, "kotlin.coroutines.c");
+        Method loadRemoteData = module.declaredMethod(
+                modelClass, "u", boolean.class, int.class, continuationClass);
+        module.deoptimizeFeatureMethod(loadRemoteData);
+
+        module.addHook("Dynamic article following page load", loadRemoteData,
+                hookChain -> withFollowingFeedScope(
+                        "following SynthesisTabLoadModel.loadRemoteData",
+                        false, hookChain::proceed));
+    }
+
+    private Object withFollowingFeedScope(
+            String source, boolean logRequest, ThrowingSupplier action)
+            throws Throwable {
+        module.ensureFeatureSettings(currentApplication());
+        if (!module.isDynamicArticleFixEnabled()) {
+            return action.get();
+        }
+        if (logRequest) {
+            logTargetRequest(source);
+        }
+        return withScope(source, action);
+    }
+
+    private void installFollowingFeedDiagnostics() throws Throwable {
+        Class<?> modelClass = module.load(classLoader,
+                "com.bilibili.bplus.followinglist.home.synthesis.model."
+                        + "SynthesisTabLoadModel");
+        Class<?> replyClass = module.load(
+                classLoader, "com.bapis.bilibili.app.dynamic.v2.DynAllReply");
+        Class<?> dynamicListClass = module.load(
+                classLoader, "com.bapis.bilibili.app.dynamic.v2.DynamicList");
+        Method consumeResponse = module.declaredMethod(
+                modelClass, "S", replyClass, int.class);
+        Method getDynamicList = module.publicMethod(replyClass, "getDynamicList");
+        Method getListCount = module.publicMethod(dynamicListClass, "getListCount");
+        module.deoptimizeFeatureMethod(consumeResponse);
+
+        module.addHook("Dynamic article following response", consumeResponse, hookChain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (module.isDynamicArticleFixEnabled()) {
+                Object reply = hookChain.getArg(0);
+                int itemCount = -1;
+                if (reply != null) {
+                    Object dynamicList = module.invoke(getDynamicList, reply);
+                    if (dynamicList != null) {
+                        Object count = module.invoke(getListCount, dynamicList);
+                        if (count instanceof Number) {
+                            itemCount = ((Number) count).intValue();
+                        }
+                    }
+                }
+                int sequence = followingResponseLogCount.incrementAndGet();
+                if (shouldSample(sequence, 20, 100)) {
+                    String message = "Dynamic article following response: items=" + itemCount
+                            + " page=" + hookChain.getArg(1)
+                            + " targetIdentity="
+                            + DynamicArticleRequestIdentity.targetIdentity(true)
+                            + " sample=" + sequence;
+                    if (itemCount == 0) {
+                        module.warn(message);
+                    } else {
+                        module.info(message);
+                    }
+                }
+            }
+            return hookChain.proceed();
+        });
     }
 
     private void installMossIdentityHooks() throws Throwable {
