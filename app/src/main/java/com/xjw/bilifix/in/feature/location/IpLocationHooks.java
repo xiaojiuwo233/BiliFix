@@ -88,8 +88,13 @@ public final class IpLocationHooks {
     public void installModern626() {
         installGroup("6.2.6 final Moss binary identity",
                 this::installModernFinalBinaryIdentity);
-        installGroup("6.2.6 Kotlin Moss comment request scope",
-                this::installModernKotlinMossScope);
+        if (module.hostVersion().isModern630OrNewer()) {
+            module.info("6.3.0 skips redundant coroutine-scoped Kotlin Moss hooks; "
+                    + "final request header hook remains active");
+        } else {
+            installGroup("6.2.6 Kotlin Moss comment request scope",
+                    this::installModernKotlinMossScope);
+        }
         installGroup("6.2.6 Moss comment request scope", this::installModernMossScope);
         installGroup("6.2.6 KMetadata identity", this::installModernMetadataIdentity);
         installGroup("6.2.6 REST request identity", this::installModernRestIdentity);
@@ -115,7 +120,8 @@ public final class IpLocationHooks {
                 "kntr.base.moss.MossInterceptor$e");
         Class<?> requestClass = module.load(classLoader,
                 "kntr.base.moss.ignet.impl.grpc.c");
-        Class<?> descriptorClass = module.load(classLoader, "zp1.g");
+        Class<?> descriptorClass = module.load(classLoader,
+                module.hostVersion().isModern630OrNewer() ? "jp1.g" : "zp1.g");
         Field requestDescriptor = module.declaredField(eventClass, "b");
         Field serviceName = module.declaredField(descriptorClass, "b");
         Field methodName = module.declaredField(descriptorClass, "c");
@@ -456,7 +462,8 @@ public final class IpLocationHooks {
      * only the identity fields for the two read-only endpoints we support.
      */
     private void installModernRestIdentity() throws Throwable {
-        Class<?> interceptorClass = module.load(classLoader, "lC0.a");
+        Class<?> interceptorClass = module.load(classLoader,
+                module.hostVersion().isModern630OrNewer() ? "XA0.a" : "lC0.a");
         Class<?> requestClass = module.load(classLoader, "okhttp3.z");
         Class<?> libBiliClass = module.load(classLoader,
                 "com.bilibili.nativelibrary.LibBili");

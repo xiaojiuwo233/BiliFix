@@ -57,8 +57,8 @@ android {
         applicationId = "com.xjw.bilifix.in"
         minSdk = 29
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.9.30"
+        versionCode = 29
+        versionName = "0.9.31"
     }
 
     signingConfigs {
@@ -107,6 +107,7 @@ dependencies {
     compileOnly("io.github.libxposed:api:${libxposedApiVersion.get()}") {
         isTransitive = false
     }
+    implementation("org.luckypray:dexkit:2.2.0")
 }
 
 configurations.configureEach {

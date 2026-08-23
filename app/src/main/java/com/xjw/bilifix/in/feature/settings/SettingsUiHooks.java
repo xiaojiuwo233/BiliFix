@@ -215,15 +215,6 @@ final class SettingsUiHooks {
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
 
-                            Class<?> routeRequestClass = module.load(classLoader,
-                                    "com.bilibili.lib.blrouter.RouteRequest");
-                            Class<?> routeFactoryClass = module.load(classLoader,
-                                    "com.bilibili.lib.blrouter.c");
-                            Class<?> routerClass = module.load(classLoader, "mj0.a");
-                            Method createRoute = module.declaredMethod(
-                                    routeFactoryClass, "c", String.class);
-                            Method openRoute = module.declaredMethod(
-                                    routerClass, "j", routeRequestClass, Context.class);
                             Object gameCenter = entryClass.getConstructor(Context.class)
                                     .newInstance(context);
                             module.invoke(setKey, gameCenter, KEY_MODERN_GAME_CENTER_ENTRY);
@@ -233,7 +224,7 @@ final class SettingsUiHooks {
                             module.invoke(setOrder, gameCenter, 2);
                             module.invoke(setOnPreferenceClickListener, gameCenter,
                                     createGameCenterClickListener(
-                                            clickListenerClass, context, createRoute, openRoute));
+                                            clickListenerClass, context));
                             module.invoke(addPreference, repairCategory, gameCenter);
 
                             Object enhanceCategory = createCategory(
@@ -415,13 +406,13 @@ final class SettingsUiHooks {
 
     private void showCompatibilityWarningIfNeeded(Context context) {
         com.xjw.bilifix.in.core.HostVersion hostVersion = module.hostVersion();
-        if (hostVersion == null || hostVersion.isExact626()) {
+        if (hostVersion == null || hostVersion.isSupportedModernHost()) {
             return;
         }
         try {
             new AlertDialog.Builder(context)
                     .setTitle("兼容性提示")
-                    .setMessage("你使用的B站版本与BiliFix兼容版本不符，可能会出现问题，请使用「6.2.6」获得最佳体验")
+                    .setMessage("你使用的B站版本与BiliFix兼容版本不符，可能会出现问题，请使用「6.2.6」或「6.3.0」获得最佳体验")
                     .setPositiveButton("知道了", null)
                     .show();
             module.warn("compatibility warning shown: host=" + hostVersion);
@@ -527,7 +518,7 @@ final class SettingsUiHooks {
                 new Class<?>[]{changeListenerClass},
                 (proxy, method, args) -> {
                     String methodName = method.getName();
-                    if (("a".equals(methodName) || "i".equals(methodName))
+                    if (method.getReturnType() == boolean.class
                             && args != null && args.length == 2) {
                         Object value = args[1];
                         if (!(value instanceof Boolean)) {
@@ -566,9 +557,7 @@ final class SettingsUiHooks {
 
     private Object createGameCenterClickListener(
             Class<?> listenerClass,
-            Context context,
-            Method createRoute,
-            Method openRoute) {
+            Context context) {
         final String route = "bilibili://game_center/home";
         return Proxy.newProxyInstance(
                 listenerClass.getClassLoader(),
@@ -576,10 +565,16 @@ final class SettingsUiHooks {
                 (proxy, method, args) -> {
                     if ("onPreferenceClick".equals(method.getName())) {
                         try {
-                            Object request = module.invoke(createRoute, null, route);
-                            Object response = module.invoke(openRoute, null, request, context);
-                            module.info("game center settings entry opened: uri=" + route
-                                    + " response=" + response);
+                            Intent routeIntent = new Intent(
+                                    Intent.ACTION_VIEW, Uri.parse(route))
+                                    .setClassName(TARGET_PACKAGE,
+                                            "tv.danmaku.bili.ui.intent.IntentHandlerActivity");
+                            if (!(context instanceof Activity)) {
+                                routeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            }
+                            context.startActivity(routeIntent);
+                            module.info("game center settings entry opened through host intent: uri="
+                                    + route);
                         } catch (Throwable throwable) {
                             module.error("game center settings entry launch failed", throwable);
                             Toast.makeText(context, "无法打开游戏中心", Toast.LENGTH_SHORT).show();

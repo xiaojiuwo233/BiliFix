@@ -21,6 +21,7 @@ import io.github.libxposed.api.XposedModule;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostVersion;
+import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.feature.article.ArticleHooks;
 import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
 import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
@@ -45,6 +46,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private volatile SystemShareHooks systemShareHooks;
     private volatile Modern626FeatureHooks modern626FeatureHooks;
     private volatile HostVersion hostVersion;
+    private volatile DexSymbolResolver dexSymbolResolver;
 
     private volatile String processName = "unknown";
 
@@ -75,6 +77,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             return;
         }
 
+        ensureDexSymbolResolver(param, classLoader);
         info("modern package-loaded early path: classLoader=" + classLoader
                 + " host=" + detected);
         installApplicationSettingsHook(classLoader);
@@ -107,6 +110,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         installApplicationSettingsHook(classLoader);
         if (hostVersion.isModern626OrNewer()) {
             if (mainProcess) {
+                ensureDexSymbolResolver(param, classLoader);
                 settingsManager.installUiHooks(classLoader);
                 Modern626FeatureHooks hooks = modernHooks(classLoader);
                 hooks.installEarly();
@@ -140,6 +144,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         }
 
         info("hook installation finished: installed=" + hookHandles.size());
+        closeDexSymbolResolver();
         schedulePostPackageInitialization();
     }
 
@@ -150,8 +155,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         initializeCurrentApplication("package-ready", true);
         boolean installed = install("early settings initialization", () -> {
             boolean modern = hostVersion().isModern626OrNewer();
+            Class<?> biliAppClass = null;
             if (modern) {
-                Class<?> biliAppClass = load(classLoader, "com.bilibili.gripper.BiliApp");
+                biliAppClass = load(classLoader, "com.bilibili.gripper.BiliApp");
                 Method attachBaseContext = declaredMethod(
                         biliAppClass, "attachBaseContext", Context.class);
                 addHook("BiliApp.attachBaseContext settings", attachBaseContext, chain -> {
@@ -164,9 +170,14 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 });
             }
 
-            String applicationClassName = modern ? "tv.danmaku.bili.A" : "tv.danmaku.bili.l";
-            Class<?> applicationClass = load(classLoader, applicationClassName);
-            Method onCreate = declaredMethod(applicationClass, "onCreate");
+            Class<?> applicationClass = modern
+                    ? biliAppClass
+                    : load(classLoader, "tv.danmaku.bili.l");
+            // 6.2.6 inherits this callback from tv.danmaku.bili.A, while 6.3.0
+            // overrides it directly in BiliApp. getMethod resolves both layouts.
+            Method onCreate = modern
+                    ? publicMethod(applicationClass, "onCreate")
+                    : declaredMethod(applicationClass, "onCreate");
             addHook("BiliApplication.onCreate settings", onCreate, chain -> {
                 Object application = chain.getThisObject();
                 if (application instanceof Context) {
@@ -202,9 +213,30 @@ public final class BiliFixModule extends XposedModule implements HookApi {
 
     private synchronized Modern626FeatureHooks modernHooks(ClassLoader classLoader) {
         if (modern626FeatureHooks == null) {
-            modern626FeatureHooks = new Modern626FeatureHooks(this, classLoader);
+            modern626FeatureHooks = new Modern626FeatureHooks(
+                    this, classLoader, dexSymbolResolver);
         }
         return modern626FeatureHooks;
+    }
+
+    private synchronized void ensureDexSymbolResolver(
+            PackageLoadedParam param, ClassLoader classLoader) {
+        if (dexSymbolResolver != null || hostVersion == null
+                || !hostVersion.isModern626OrNewer()) {
+            return;
+        }
+        String sourceDir = param.getApplicationInfo() == null
+                ? null : param.getApplicationInfo().sourceDir;
+        dexSymbolResolver = new DexSymbolResolver(
+                this, hostVersion, classLoader, sourceDir);
+        info("DexKit symbol resolver prepared: sourceDir=" + sourceDir);
+    }
+
+    private synchronized void closeDexSymbolResolver() {
+        DexSymbolResolver resolver = dexSymbolResolver;
+        if (resolver != null) {
+            resolver.close();
+        }
     }
 
     private boolean initializeCurrentApplication(String source, boolean reportNotReady) {
@@ -405,7 +437,8 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
-    public void addHook(String label, Method method, XposedInterface.Hooker hooker) {
+    public synchronized void addHook(
+            String label, Method method, XposedInterface.Hooker hooker) {
         XposedInterface.HookHandle handle = hook(method)
                 .setPriority(XposedInterface.PRIORITY_HIGHEST)
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)

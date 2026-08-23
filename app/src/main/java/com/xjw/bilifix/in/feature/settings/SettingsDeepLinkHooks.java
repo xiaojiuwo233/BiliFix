@@ -35,9 +35,9 @@ final class SettingsDeepLinkHooks {
         Class<?> settingsActivityClass = module.load(classLoader,
                 "com.bilibili.app.preferences.BiliPreferencesActivity");
         Method dispatch = resolveMethod(handlerClass,
-                new String[]{"t9", "y6"}, Intent.class, boolean.class);
+                new String[]{"ka", "t9", "y6"}, Intent.class, boolean.class);
         Method showFragment = resolveMethod(settingsActivityClass,
-                new String[]{"I9", "Q6"}, CharSequence.class, String.class,
+                new String[]{"za", "I9", "Q6"}, CharSequence.class, String.class,
                 Bundle.class, boolean.class);
 
         module.addHook("IntentHandlerActivity BiliFix settings dispatch", dispatch, chain -> {
