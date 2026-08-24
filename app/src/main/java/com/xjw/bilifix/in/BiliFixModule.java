@@ -29,6 +29,7 @@ import com.xjw.bilifix.in.feature.commentcopy.CommentFreeCopyHooks;
 import com.xjw.bilifix.in.feature.compat.CompatFeatureHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
 import com.xjw.bilifix.in.feature.modern.Modern626FeatureHooks;
+import com.xjw.bilifix.in.feature.modern.story.ModernStoryEntryHooks;
 import com.xjw.bilifix.in.feature.share.SystemShareHooks;
 import com.xjw.bilifix.in.feature.settings.SettingsManager;
 import com.xjw.bilifix.in.feature.subtitle.AiSubtitleHooks;
@@ -119,6 +120,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 Modern626FeatureHooks hooks = modernHooks(classLoader);
                 hooks.installEarly();
                 hooks.installReady();
+                new ModernStoryEntryHooks(this, classLoader).install();
                 new IpLocationHooks(this, classLoader).installModern626();
             } else {
                 new IpLocationHooks(this, classLoader).installModern626();
@@ -393,8 +395,23 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
+    public boolean isModernStoryMasterEnabled() {
+        return settingsManager.isModernStoryMasterEnabled();
+    }
+
+    @Override
     public boolean isModernStoryEnabled() {
         return settingsManager.isModernStoryEnabled();
+    }
+
+    @Override
+    public boolean isModernStoryHomeCardEnabled() {
+        return settingsManager.isModernStoryHomeCardEnabled();
+    }
+
+    @Override
+    public boolean isModernStoryPlayerButtonEnabled() {
+        return settingsManager.isModernStoryPlayerButtonEnabled();
     }
 
     @Override

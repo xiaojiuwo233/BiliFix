@@ -1,6 +1,6 @@
 # BiliFix White
 
-针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。下载请查看本仓库最新[pre-release](https://github.com/xiaojiuwo233/BiliFix/releases/tag/b6.2.6-0.9.30)
+针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。下载请查看本仓库最新[CI](https://github.com/xiaojiuwo233/BiliFix/actions?query=branch%3A6.2.6)
 
 > 自用模块，不保证其稳定性，欢迎各位大佬贡献！
 
@@ -19,7 +19,7 @@
 ### 修复
 
 - 恢复直播Tab
-- 恢复竖屏模式入口
+- 完整竖屏模式入口
 - 游戏中心入口
 
 ### 增强
@@ -35,6 +35,7 @@
 ## 反馈
 
 如果你在使用过程中遇到问题，欢迎在[issue](https://github.com/xiaojiuwo233/BiliFix/issues/new)中提出。
+
 注意，发送前务必包含必要的复现步骤和日志，否则issue将会被关闭。**此版本维护优先级较低，可能不会及时处理，反馈时请注明版本号**
 
 ## 许可证

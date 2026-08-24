@@ -15,6 +15,9 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_GAM
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_LIVE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_HOME_CARD_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_MASTER_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
@@ -157,6 +160,8 @@ final class SettingsUiHooks {
         Method setPersistent = module.publicMethod(preferenceClass,
                 "setPersistent", boolean.class);
         Method setOrder = module.publicMethod(preferenceClass, "setOrder", int.class);
+        Method setVisible = module.publicMethod(preferenceClass,
+                "setVisible", boolean.class);
         Method setLayoutResource = module.publicMethod(preferenceClass,
                 "setLayoutResource", int.class);
         Method setOnPreferenceChangeListener = module.publicMethod(preferenceClass,
@@ -206,31 +211,77 @@ final class SettingsUiHooks {
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
-                            addSwitch(repairCategory, switchConstructor,
-                                    KEY_MODERN_STORY_ENABLED,
-                                    "恢复竖屏模式入口",
-                                    "首页左上角头像进入竖屏模式中心",
-                                    settings.isModernStoryEnabled(), 1,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-
                             Object gameCenter = entryClass.getConstructor(Context.class)
                                     .newInstance(context);
                             module.invoke(setKey, gameCenter, KEY_MODERN_GAME_CENTER_ENTRY);
                             module.invoke(setTitle, gameCenter, "游戏中心");
                             module.invoke(setSummary, gameCenter, "打开B站游戏中心");
                             module.invoke(setPersistent, gameCenter, false);
-                            module.invoke(setOrder, gameCenter, 2);
+                            module.invoke(setOrder, gameCenter, 1);
                             module.invoke(setOnPreferenceClickListener, gameCenter,
                                     createGameCenterClickListener(
                                             clickListenerClass, context));
                             module.invoke(addPreference, repairCategory, gameCenter);
 
+                            Object storyCategory = createCategory(
+                                    context, categoryConstructor, categoryTitleLayout,
+                                    "竖屏模式", 1, setTitle, setLayoutResource, setOrder);
+                            module.invoke(addPreference, screen, storyCategory);
+                            Object storyMaster = addSwitch(
+                                    storyCategory, switchConstructor,
+                                    KEY_MODERN_STORY_MASTER_ENABLED,
+                                    "启用竖屏模式",
+                                    "启用B站竖屏模式相关功能",
+                                    settings.isModernStoryMasterEnabled(), 0,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
+                            Object storyAvatar = addSwitch(
+                                    storyCategory, switchConstructor,
+                                    KEY_MODERN_STORY_ENABLED,
+                                    "启用头像入口",
+                                    "点击首页左上角头像进入竖屏模式中心",
+                                    settings.isModernStoryEnabled(), 1,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
+                            Object storyHomeCard = addSwitch(
+                                    storyCategory, switchConstructor,
+                                    KEY_MODERN_STORY_HOME_CARD_ENABLED,
+                                    "首页竖屏视频自动进入",
+                                    "首页点击竖屏视频直接进入竖屏模式",
+                                    settings.isModernStoryHomeCardEnabled(), 2,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
+                            Object storyPlayerButton = addSwitch(
+                                    storyCategory, switchConstructor,
+                                    KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
+                                    "视频详情页恢复竖屏入口",
+                                    "影响所有横竖屏视频",
+                                    settings.isModernStoryPlayerButtonEnabled(), 3,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
+                            Object[] storyChildren = {
+                                    storyAvatar, storyHomeCard, storyPlayerButton
+                            };
+                            setPreferenceVisibility(
+                                    storyChildren, settings.isModernStoryMasterEnabled(),
+                                    setVisible);
+                            module.invoke(setOnPreferenceChangeListener, storyMaster,
+                                    createVisibilityMasterListener(
+                                            changeListenerClass, context,
+                                            KEY_MODERN_STORY_MASTER_ENABLED,
+                                            storyChildren, setVisible));
+
                             Object enhanceCategory = createCategory(
                                     context, categoryConstructor, categoryTitleLayout,
-                                    "增强", 1, setTitle, setLayoutResource, setOrder);
+                                    "增强", 2, setTitle, setLayoutResource, setOrder);
                             module.invoke(addPreference, screen, enhanceCategory);
                             addSwitch(enhanceCategory, switchConstructor,
                                     KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED,
@@ -259,7 +310,7 @@ final class SettingsUiHooks {
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
-                            aboutCategoryOrder = 2;
+                            aboutCategoryOrder = 3;
                         } else {
                             addSwitch(repairCategory, switchConstructor,
                                     KEY_ARTICLE_FIX_ENABLED,
@@ -405,7 +456,13 @@ final class SettingsUiHooks {
                                 + " modernLive=" + settings.isModernLiveEnabled()
                                 + " modernMessageTopRight="
                                 + settings.isModernMessageTopRightEnabled()
-                                + " modernStory=" + settings.isModernStoryEnabled());
+                                + " modernStoryMaster="
+                                + settings.isModernStoryMasterEnabled()
+                                + " modernStory=" + settings.isModernStoryEnabled()
+                                + " modernStoryHomeCard="
+                                + settings.isModernStoryHomeCardEnabled()
+                                + " modernStoryPlayerButton="
+                                + settings.isModernStoryPlayerButtonEnabled());
                         return null;
                     } catch (Throwable throwable) {
                         module.error("BiliFix settings page creation failed", throwable);
@@ -487,7 +544,7 @@ final class SettingsUiHooks {
         return category;
     }
 
-    private void addSwitch(
+    private Object addSwitch(
             Object category,
             Constructor<?> constructor,
             String key,
@@ -510,6 +567,51 @@ final class SettingsUiHooks {
                 changeListenerClass, context, setKey, setTitle, setSummary,
                 setPersistent, setOrder, setOnPreferenceChangeListener, setChecked);
         module.invoke(addPreference, category, preference);
+        return preference;
+    }
+
+    private Object createVisibilityMasterListener(
+            Class<?> listenerClass,
+            Context context,
+            String key,
+            Object[] children,
+            Method setVisible) {
+        return Proxy.newProxyInstance(
+                listenerClass.getClassLoader(),
+                new Class<?>[]{listenerClass},
+                (proxy, method, args) -> {
+                    if (method.getReturnType() == boolean.class
+                            && args != null && args.length == 2) {
+                        Object value = args[1];
+                        if (!(value instanceof Boolean)) {
+                            module.warn("setting change rejected: key=" + key
+                                    + " value=" + summarizeObject(value));
+                            return false;
+                        }
+                        boolean visible = (Boolean) value;
+                        if (!settings.persist(context, key, visible)) {
+                            return false;
+                        }
+                        try {
+                            setPreferenceVisibility(children, visible, setVisible);
+                            module.info("story child settings visibility changed: visible="
+                                    + visible);
+                        } catch (Throwable throwable) {
+                            module.error("story child settings visibility update failed",
+                                    throwable);
+                        }
+                        return true;
+                    }
+                    return handleObjectMethod(proxy, method.getName(), args,
+                            "BiliFixVisibilityMasterListener(" + key + ")");
+                });
+    }
+
+    private void setPreferenceVisibility(
+            Object[] preferences, boolean visible, Method setVisible) throws Throwable {
+        for (Object preference : preferences) {
+            module.invoke(setVisible, preference, visible);
+        }
     }
 
     private void configureSwitch(

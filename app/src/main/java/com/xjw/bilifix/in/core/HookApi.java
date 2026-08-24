@@ -47,7 +47,13 @@ public interface HookApi {
 
     boolean isModernMessageTopRightEnabled();
 
+    boolean isModernStoryMasterEnabled();
+
     boolean isModernStoryEnabled();
+
+    boolean isModernStoryHomeCardEnabled();
+
+    boolean isModernStoryPlayerButtonEnabled();
 
     boolean deoptimizeFeatureMethod(Method method);
 

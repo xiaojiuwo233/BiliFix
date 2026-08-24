@@ -24,19 +24,19 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Feature entry restoration hooks verified against international client 6.2.6. */
+/**
+ * Feature entry restoration hooks verified against international client 6.2.6.
+ */
 public final class Modern626FeatureHooks {
     private static final String LIVE_URI = "bilibili://live/home";
     private static final String MESSAGE_ROUTE_URI = "bilibili://link/im_home";
     private static final String STORY_URI = "bilibili://side_center/container";
-    private static final String HOST_INTENT_HANDLER =
-            "tv.danmaku.bili.ui.intent.IntentHandlerActivity";
+    private static final String HOST_INTENT_HANDLER = "tv.danmaku.bili.ui.intent.IntentHandlerActivity";
 
     private final HookApi module;
     private final ClassLoader classLoader;
     private final DexSymbolResolver symbolResolver;
-    private final ThreadLocal<Integer> storyDispatchDepth =
-            ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Integer> storyDispatchDepth = ThreadLocal.withInitial(() -> 0);
     private final AtomicBoolean liveConversionLogged = new AtomicBoolean(false);
     private final AtomicBoolean liveCacheReset = new AtomicBoolean(false);
     private final AtomicBoolean liveHooksInstalled = new AtomicBoolean(false);
@@ -54,7 +54,10 @@ public final class Modern626FeatureHooks {
         this.symbolResolver = symbolResolver;
     }
 
-    /** Hooks that must be active before the host constructs and caches home resources. */
+    /**
+     * Hooks that must be active before the host constructs and caches home
+     * resources.
+     */
     public void installEarly() {
         installGroupOnce(
                 modernHomeHooksInstalled, "6.2.6 KHome direct entries",
@@ -87,25 +90,16 @@ public final class Modern626FeatureHooks {
         module.addHook(homePackage + ".j restore modern home data", dataConstructor, chain -> {
             module.ensureFeatureSettings(currentApplication());
             Object[] args = chain.getArgs().toArray();
-            module.debug("modern home data constructor observed: arg0="
-                    + describeList(args, 0) + " arg1=" + describeList(args, 1)
-                    + " arg2=" + describeList(args, 2) + " arg3=" + describeList(args, 3)
-                    + " live=" + module.isModernLiveEnabled()
-                    + " messageTopRight=" + module.isModernMessageTopRightEnabled()
-                    + " bottomItems=" + describeItems(args[2]));
             boolean changed = false;
             Object messageItem = null;
             if (module.isModernMessageTopRightEnabled() && args[2] instanceof List) {
                 messageItem = findMessageItem((List<?>) args[2], itemClassName);
             }
             if (messageItem != null) {
-                // The bottom navigation uses bilibili://im/home_tab, while the
-                // top-right component only handles bilibili://link/im_home.
-                // Reuse the original item (and its icon/badge fields) but
-                // normalize its route before moving it between model lists.
                 normalizeMessageRoute(messageItem);
                 List<?> originalTopRight = args[0] instanceof List
-                        ? (List<?>) args[0] : Collections.emptyList();
+                        ? (List<?>) args[0]
+                        : Collections.emptyList();
                 if (!containsRoute(
                         originalTopRight, itemClassName, "c", MESSAGE_ROUTE_URI)) {
                     ArrayList<Object> patchedTopRight = new ArrayList<>(originalTopRight.size() + 1);
@@ -146,53 +140,8 @@ public final class Modern626FeatureHooks {
         });
     }
 
-    private static String describeList(Object[] args, int index) {
-        if (index >= args.length || args[index] == null) {
-            return "null";
-        }
-        if (args[index] instanceof List) {
-            return "List(size=" + ((List<?>) args[index]).size() + ")";
-        }
-        return args[index].getClass().getName();
-    }
-
     private static int patchedTopRightSize(Object value) {
         return value instanceof List ? ((List<?>) value).size() : -1;
-    }
-
-    private static String describeItems(Object value) {
-        if (!(value instanceof List)) {
-            return String.valueOf(value);
-        }
-        StringBuilder builder = new StringBuilder("[");
-        int count = 0;
-        for (Object item : (List<?>) value) {
-            if (count++ > 0) {
-                builder.append("; ");
-            }
-            builder.append(item == null ? "null" : describeItem(item));
-            if (count >= 8) {
-                if (((List<?>) value).size() > count) {
-                    builder.append("; ...");
-                }
-                break;
-            }
-        }
-        return builder.append(']').toString();
-    }
-
-    private static String describeItem(Object item) {
-        StringBuilder builder = new StringBuilder(item.getClass().getSimpleName()).append('{');
-        for (String fieldName : new String[]{"a", "b", "c", "d", "e", "h", "i"}) {
-            try {
-                Field field = item.getClass().getDeclaredField(fieldName);
-                field.setAccessible(true);
-                builder.append(fieldName).append('=').append(field.get(item)).append(',');
-            } catch (Throwable ignored) {
-                // Obfuscated model fields are best-effort diagnostics only.
-            }
-        }
-        return builder.append('}').toString();
     }
 
     private void installModernLiveServiceHook() throws Throwable {
@@ -210,7 +159,7 @@ public final class Modern626FeatureHooks {
                 method.setAccessible(true);
                 module.deoptimizeFeatureMethod(method);
                 module.addHook("HomeTabServiceImplV2." + method.getName()
-                                + " restore live",
+                        + " restore live",
                         method, chain -> liveHook.apply(chain.proceed()));
                 installed++;
             }
@@ -222,7 +171,10 @@ public final class Modern626FeatureHooks {
         module.info("modern home tab list methods hooked: count=" + installed);
     }
 
-    /** Hooks whose classes and runtime state are only needed after the package is ready. */
+    /**
+     * Hooks whose classes and runtime state are only needed after the package is
+     * ready.
+     */
     public void installReady() {
         if (module.hostVersion().isSupportedModernHost()) {
             installGroupOnce(
@@ -380,15 +332,16 @@ public final class Modern626FeatureHooks {
         if (symbolResolver == null) {
             throw new IllegalStateException("DexKit symbol resolver is unavailable");
         }
-        DexSymbolResolver.StoryGateSymbols symbols =
-                symbolResolver.resolveStoryGateSymbols(cacheContext);
+        DexSymbolResolver.StoryGateSymbols symbols = symbolResolver.resolveStoryGateSymbols(cacheContext);
         Method handler = symbols.handler();
         Method overseaGate = symbols.overseaGate();
         module.deoptimizeFeatureMethod(handler);
         module.deoptimizeFeatureMethod(overseaGate);
 
         module.addHook("TopLeftComponent scoped story redirect", overseaGate, chain -> {
-            if (storyDispatchDepth.get() > 0 && module.isModernStoryEnabled()) {
+            if (storyDispatchDepth.get() > 0
+                    && module.isModernStoryMasterEnabled()
+                    && module.isModernStoryEnabled()) {
                 Context context = currentApplication();
                 if (context != null) {
                     try {
@@ -411,15 +364,14 @@ public final class Modern626FeatureHooks {
         module.addHook("TopLeftComponent avatar restore story", handler, chain -> {
             Context application = currentApplication();
             module.ensureFeatureSettings(application);
-            if (!module.isModernStoryEnabled()) {
+            if (!module.isModernStoryMasterEnabled()
+                    || !module.isModernStoryEnabled()) {
                 return chain.proceed();
             }
             int previousDepth = storyDispatchDepth.get();
             storyDispatchDepth.set(previousDepth + 1);
             try {
-                Object result = chain.proceed();
-                module.debug("modern story host handler completed with scoped redirect");
-                return result;
+                return chain.proceed();
             } finally {
                 if (previousDepth == 0) {
                     storyDispatchDepth.remove();

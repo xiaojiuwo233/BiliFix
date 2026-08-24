@@ -49,8 +49,14 @@ public final class SettingsManager {
             "bilifix_modern_game_center_enabled";
     static final String KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED =
             "bilifix_modern_message_top_right_enabled";
+    static final String KEY_MODERN_STORY_MASTER_ENABLED =
+            "bilifix_modern_story_master_enabled";
     static final String KEY_MODERN_STORY_ENABLED =
             "bilifix_modern_story_enabled";
+    static final String KEY_MODERN_STORY_HOME_CARD_ENABLED =
+            "bilifix_modern_story_home_card_enabled";
+    static final String KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED =
+            "bilifix_modern_story_player_button_enabled";
     static final String KEY_MODERN_GAME_CENTER_ENTRY =
             "bilifix_modern_game_center_entry";
     static final String KEY_SETTINGS_ENTRY = "bilifix_settings_entry";
@@ -81,7 +87,10 @@ public final class SettingsManager {
     private volatile boolean modernLiveEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernGameCenterEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernMessageTopRightEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean modernStoryMasterEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernStoryEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean modernStoryHomeCardEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean modernStoryPlayerButtonEnabled = DEFAULT_FEATURE_ENABLED;
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
@@ -113,7 +122,16 @@ public final class SettingsManager {
                     intent.getBooleanExtra(
                             KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED,
                             modernMessageTopRightEnabled),
+                    intent.getBooleanExtra(
+                            KEY_MODERN_STORY_MASTER_ENABLED,
+                            modernStoryMasterEnabled),
                     intent.getBooleanExtra(KEY_MODERN_STORY_ENABLED, modernStoryEnabled),
+                    intent.getBooleanExtra(
+                            KEY_MODERN_STORY_HOME_CARD_ENABLED,
+                            modernStoryHomeCardEnabled),
+                    intent.getBooleanExtra(
+                            KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
+                            modernStoryPlayerButtonEnabled),
                     "broadcast");
         }
     };
@@ -143,7 +161,10 @@ public final class SettingsManager {
             boolean modernLiveEnabled;
             boolean modernGameCenterEnabled;
             boolean modernMessageTopRightEnabled;
+            boolean modernStoryMasterEnabled;
             boolean modernStoryEnabled;
+            boolean modernStoryHomeCardEnabled;
+            boolean modernStoryPlayerButtonEnabled;
             // The write, the read-back and the publish must be atomic against ensureLoaded(),
             // which would otherwise republish the snapshot it captured before this write.
             synchronized (stateLock) {
@@ -181,14 +202,21 @@ public final class SettingsManager {
                         KEY_MODERN_GAME_CENTER_ENABLED, DEFAULT_FEATURE_ENABLED);
                 modernMessageTopRightEnabled = preferences.getBoolean(
                         KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED, DEFAULT_FEATURE_ENABLED);
+                modernStoryMasterEnabled = readModernStoryMaster(preferences);
                 modernStoryEnabled = preferences.getBoolean(
                         KEY_MODERN_STORY_ENABLED, DEFAULT_FEATURE_ENABLED);
+                modernStoryHomeCardEnabled = preferences.getBoolean(
+                        KEY_MODERN_STORY_HOME_CARD_ENABLED, DEFAULT_FEATURE_ENABLED);
+                modernStoryPlayerButtonEnabled = preferences.getBoolean(
+                        KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED, DEFAULT_FEATURE_ENABLED);
                 applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled,
                         relationEnabled, walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
                         aiCommentTranslationEnabled, shareEnabled, commentFreeCopyEnabled,
                         modernLiveEnabled,
                         modernGameCenterEnabled, modernMessageTopRightEnabled,
-                        modernStoryEnabled, "settings-page");
+                        modernStoryMasterEnabled, modernStoryEnabled,
+                        modernStoryHomeCardEnabled,
+                        modernStoryPlayerButtonEnabled, "settings-page");
             }
 
             Intent update = new Intent(SETTINGS_CHANGED_ACTION)
@@ -210,7 +238,15 @@ public final class SettingsManager {
                     .putExtra(KEY_MODERN_GAME_CENTER_ENABLED, modernGameCenterEnabled)
                     .putExtra(KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED,
                             modernMessageTopRightEnabled)
-                    .putExtra(KEY_MODERN_STORY_ENABLED, modernStoryEnabled);
+                    .putExtra(KEY_MODERN_STORY_MASTER_ENABLED,
+                            modernStoryMasterEnabled)
+                    .putExtra(KEY_MODERN_STORY_ENABLED, modernStoryEnabled)
+                    .putExtra(
+                            KEY_MODERN_STORY_HOME_CARD_ENABLED,
+                            modernStoryHomeCardEnabled)
+                    .putExtra(
+                            KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
+                            modernStoryPlayerButtonEnabled);
             context.sendBroadcast(update);
             module.info("setting persisted: key=" + key + " value=" + value
                     + " broadcast=true");
@@ -267,8 +303,15 @@ public final class SettingsManager {
                             KEY_MODERN_GAME_CENTER_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    readModernStoryMaster(preferences),
                     preferences.getBoolean(
                             KEY_MODERN_STORY_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_MODERN_STORY_HOME_CARD_ENABLED,
+                            DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
+                            DEFAULT_FEATURE_ENABLED),
                     "shared-preferences");
         }
     }
@@ -285,6 +328,27 @@ public final class SettingsManager {
                     + " implementation=" + preferences.getClass().getName());
         }
         return preferences;
+    }
+
+    private static boolean readModernStoryMaster(SharedPreferences preferences) {
+        if (preferences.contains(KEY_MODERN_STORY_MASTER_ENABLED)) {
+            return preferences.getBoolean(
+                    KEY_MODERN_STORY_MASTER_ENABLED, DEFAULT_FEATURE_ENABLED);
+        }
+        boolean migratedValue = (preferences.contains(KEY_MODERN_STORY_ENABLED)
+                && preferences.getBoolean(
+                        KEY_MODERN_STORY_ENABLED, DEFAULT_FEATURE_ENABLED))
+                || (preferences.contains(KEY_MODERN_STORY_HOME_CARD_ENABLED)
+                && preferences.getBoolean(
+                        KEY_MODERN_STORY_HOME_CARD_ENABLED, DEFAULT_FEATURE_ENABLED))
+                || (preferences.contains(KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED)
+                && preferences.getBoolean(
+                        KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
+                        DEFAULT_FEATURE_ENABLED));
+        preferences.edit()
+                .putBoolean(KEY_MODERN_STORY_MASTER_ENABLED, migratedValue)
+                .apply();
+        return migratedValue;
     }
 
     /**
@@ -306,7 +370,10 @@ public final class SettingsManager {
             boolean modernLiveEnabled,
             boolean modernGameCenterEnabled,
             boolean modernMessageTopRightEnabled,
+            boolean modernStoryMasterEnabled,
             boolean modernStoryEnabled,
+            boolean modernStoryHomeCardEnabled,
+            boolean modernStoryPlayerButtonEnabled,
             String source) {
         synchronized (stateLock) {
             applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled, relationEnabled,
@@ -314,7 +381,9 @@ public final class SettingsManager {
                     aiCommentTranslationEnabled, shareEnabled, commentFreeCopyEnabled,
                     modernLiveEnabled,
                     modernGameCenterEnabled, modernMessageTopRightEnabled,
-                    modernStoryEnabled, source);
+                    modernStoryMasterEnabled, modernStoryEnabled,
+                    modernStoryHomeCardEnabled,
+                    modernStoryPlayerButtonEnabled, source);
         }
     }
 
@@ -332,7 +401,10 @@ public final class SettingsManager {
             boolean modernLiveEnabled,
             boolean modernGameCenterEnabled,
             boolean modernMessageTopRightEnabled,
+            boolean modernStoryMasterEnabled,
             boolean modernStoryEnabled,
+            boolean modernStoryHomeCardEnabled,
+            boolean modernStoryPlayerButtonEnabled,
             String source) {
         boolean changed = !loaded
                 || articleFixEnabled != articleEnabled
@@ -348,7 +420,10 @@ public final class SettingsManager {
                 || this.modernLiveEnabled != modernLiveEnabled
                 || this.modernGameCenterEnabled != modernGameCenterEnabled
                 || this.modernMessageTopRightEnabled != modernMessageTopRightEnabled
-                || this.modernStoryEnabled != modernStoryEnabled;
+                || this.modernStoryMasterEnabled != modernStoryMasterEnabled
+                || this.modernStoryEnabled != modernStoryEnabled
+                || this.modernStoryHomeCardEnabled != modernStoryHomeCardEnabled
+                || this.modernStoryPlayerButtonEnabled != modernStoryPlayerButtonEnabled;
         articleFixEnabled = articleEnabled;
         dynamicArticleFixEnabled = dynamicArticleEnabled;
         regionFixEnabled = regionEnabled;
@@ -362,7 +437,10 @@ public final class SettingsManager {
         this.modernLiveEnabled = modernLiveEnabled;
         this.modernGameCenterEnabled = modernGameCenterEnabled;
         this.modernMessageTopRightEnabled = modernMessageTopRightEnabled;
+        this.modernStoryMasterEnabled = modernStoryMasterEnabled;
         this.modernStoryEnabled = modernStoryEnabled;
+        this.modernStoryHomeCardEnabled = modernStoryHomeCardEnabled;
+        this.modernStoryPlayerButtonEnabled = modernStoryPlayerButtonEnabled;
         loaded = true;
         String message = "settings " + (changed ? "applied" : "unchanged")
                 + ": source=" + source
@@ -380,7 +458,10 @@ public final class SettingsManager {
                 + " modernLive=" + modernLiveEnabled
                 + " modernGameCenter=" + modernGameCenterEnabled
                 + " modernMessageTopRight=" + modernMessageTopRightEnabled
-                + " modernStory=" + modernStoryEnabled;
+                + " modernStoryMaster=" + modernStoryMasterEnabled
+                + " modernStory=" + modernStoryEnabled
+                + " modernStoryHomeCard=" + modernStoryHomeCardEnabled
+                + " modernStoryPlayerButton=" + modernStoryPlayerButtonEnabled;
         if (changed) {
             module.info(message);
         } else {
@@ -468,8 +549,20 @@ public final class SettingsManager {
         return modernMessageTopRightEnabled;
     }
 
+    public boolean isModernStoryMasterEnabled() {
+        return modernStoryMasterEnabled;
+    }
+
     public boolean isModernStoryEnabled() {
         return modernStoryEnabled;
+    }
+
+    public boolean isModernStoryHomeCardEnabled() {
+        return modernStoryHomeCardEnabled;
+    }
+
+    public boolean isModernStoryPlayerButtonEnabled() {
+        return modernStoryPlayerButtonEnabled;
     }
 
 }
