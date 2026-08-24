@@ -25,6 +25,7 @@ import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.feature.article.ArticleHooks;
 import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
 import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
+import com.xjw.bilifix.in.feature.commentcopy.CommentFreeCopyHooks;
 import com.xjw.bilifix.in.feature.compat.CompatFeatureHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
 import com.xjw.bilifix.in.feature.modern.Modern626FeatureHooks;
@@ -108,6 +109,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 + " host=" + hostVersion);
 
         installApplicationSettingsHook(classLoader);
+        if (mainProcess) {
+            new CommentFreeCopyHooks(this, classLoader).install();
+        }
         if (hostVersion.isModern626OrNewer()) {
             if (mainProcess) {
                 ensureDexSymbolResolver(param, classLoader);
@@ -366,6 +370,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public boolean isSystemShareEnabled() {
         return settingsManager.isSystemShareEnabled();
+    }
+
+    @Override
+    public boolean isCommentFreeCopyEnabled() {
+        return settingsManager.isCommentFreeCopyEnabled();
     }
 
     @Override

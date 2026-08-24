@@ -8,6 +8,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ABOUT;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_COMMENT_TRANSLATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_SUBTITLE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ARTICLE_FIX_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_COMMENT_FREE_COPY_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_DYNAMIC_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_GAME_CENTER_ENTRY;
@@ -249,6 +250,15 @@ final class SettingsUiHooks {
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
+                            addSwitch(enhanceCategory, switchConstructor,
+                                    KEY_COMMENT_FREE_COPY_ENABLED,
+                                    "评论自由复制",
+                                    "来自哔哩漫游",
+                                    settings.isCommentFreeCopyEnabled(), 2,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
                             aboutCategoryOrder = 2;
                         } else {
                             addSwitch(repairCategory, switchConstructor,
@@ -336,6 +346,15 @@ final class SettingsUiHooks {
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
+                            addSwitch(enhanceCategory, switchConstructor,
+                                    KEY_COMMENT_FREE_COPY_ENABLED,
+                                    "评论自由复制",
+                                    "来自哔哩漫游",
+                                    settings.isCommentFreeCopyEnabled(), 4,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
                             aboutCategoryOrder = 2;
                         }
 
@@ -381,6 +400,8 @@ final class SettingsUiHooks {
                                 + " aiCommentTranslation="
                                 + settings.isAiCommentTranslationEnabled()
                                 + " systemShare=" + settings.isSystemShareEnabled()
+                                + " commentFreeCopy="
+                                + settings.isCommentFreeCopyEnabled()
                                 + " modernLive=" + settings.isModernLiveEnabled()
                                 + " modernMessageTopRight="
                                 + settings.isModernMessageTopRightEnabled()

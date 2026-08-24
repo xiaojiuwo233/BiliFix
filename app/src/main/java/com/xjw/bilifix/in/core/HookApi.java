@@ -39,6 +39,8 @@ public interface HookApi {
 
     boolean isSystemShareEnabled();
 
+    boolean isCommentFreeCopyEnabled();
+
     boolean isModernLiveEnabled();
 
     boolean isModernGameCenterEnabled();

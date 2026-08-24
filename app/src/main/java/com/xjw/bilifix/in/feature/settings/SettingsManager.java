@@ -41,6 +41,8 @@ public final class SettingsManager {
             "bilifix_ai_comment_translation_enabled";
     static final String KEY_SYSTEM_SHARE_ENABLED =
             "bilifix_system_share_enabled";
+    static final String KEY_COMMENT_FREE_COPY_ENABLED =
+            "bilifix_comment_free_copy_enabled";
     static final String KEY_MODERN_LIVE_ENABLED =
             "bilifix_modern_live_enabled";
     static final String KEY_MODERN_GAME_CENTER_ENABLED =
@@ -75,6 +77,7 @@ public final class SettingsManager {
     private volatile boolean aiSubtitleEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean aiCommentTranslationEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean systemShareEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean commentFreeCopyEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernLiveEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernGameCenterEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernMessageTopRightEnabled = DEFAULT_FEATURE_ENABLED;
@@ -100,6 +103,9 @@ public final class SettingsManager {
                             KEY_AI_COMMENT_TRANSLATION_ENABLED,
                             aiCommentTranslationEnabled),
                     intent.getBooleanExtra(KEY_SYSTEM_SHARE_ENABLED, systemShareEnabled),
+                    intent.getBooleanExtra(
+                            KEY_COMMENT_FREE_COPY_ENABLED,
+                            commentFreeCopyEnabled),
                     intent.getBooleanExtra(KEY_MODERN_LIVE_ENABLED, modernLiveEnabled),
                     intent.getBooleanExtra(
                             KEY_MODERN_GAME_CENTER_ENABLED,
@@ -133,6 +139,7 @@ public final class SettingsManager {
             boolean aiSubtitleEnabled;
             boolean aiCommentTranslationEnabled;
             boolean shareEnabled;
+            boolean commentFreeCopyEnabled;
             boolean modernLiveEnabled;
             boolean modernGameCenterEnabled;
             boolean modernMessageTopRightEnabled;
@@ -166,6 +173,8 @@ public final class SettingsManager {
                         KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED);
                 shareEnabled = preferences.getBoolean(
                         KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED);
+                commentFreeCopyEnabled = preferences.getBoolean(
+                        KEY_COMMENT_FREE_COPY_ENABLED, DEFAULT_FEATURE_ENABLED);
                 modernLiveEnabled = preferences.getBoolean(
                         KEY_MODERN_LIVE_ENABLED, DEFAULT_FEATURE_ENABLED);
                 modernGameCenterEnabled = preferences.getBoolean(
@@ -176,7 +185,8 @@ public final class SettingsManager {
                         KEY_MODERN_STORY_ENABLED, DEFAULT_FEATURE_ENABLED);
                 applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled,
                         relationEnabled, walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
-                        aiCommentTranslationEnabled, shareEnabled, modernLiveEnabled,
+                        aiCommentTranslationEnabled, shareEnabled, commentFreeCopyEnabled,
+                        modernLiveEnabled,
                         modernGameCenterEnabled, modernMessageTopRightEnabled,
                         modernStoryEnabled, "settings-page");
             }
@@ -195,6 +205,7 @@ public final class SettingsManager {
                             KEY_AI_COMMENT_TRANSLATION_ENABLED,
                             aiCommentTranslationEnabled)
                     .putExtra(KEY_SYSTEM_SHARE_ENABLED, shareEnabled)
+                    .putExtra(KEY_COMMENT_FREE_COPY_ENABLED, commentFreeCopyEnabled)
                     .putExtra(KEY_MODERN_LIVE_ENABLED, modernLiveEnabled)
                     .putExtra(KEY_MODERN_GAME_CENTER_ENABLED, modernGameCenterEnabled)
                     .putExtra(KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED,
@@ -249,6 +260,8 @@ public final class SettingsManager {
                     preferences.getBoolean(
                             KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
+                            KEY_COMMENT_FREE_COPY_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
                             KEY_MODERN_LIVE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_MODERN_GAME_CENTER_ENABLED, DEFAULT_FEATURE_ENABLED),
@@ -289,6 +302,7 @@ public final class SettingsManager {
             boolean aiSubtitleEnabled,
             boolean aiCommentTranslationEnabled,
             boolean shareEnabled,
+            boolean commentFreeCopyEnabled,
             boolean modernLiveEnabled,
             boolean modernGameCenterEnabled,
             boolean modernMessageTopRightEnabled,
@@ -297,7 +311,8 @@ public final class SettingsManager {
         synchronized (stateLock) {
             applyLocked(articleEnabled, dynamicArticleEnabled, regionEnabled, relationEnabled,
                     walletEnabled, ipLocationEnabled, aiSubtitleEnabled,
-                    aiCommentTranslationEnabled, shareEnabled, modernLiveEnabled,
+                    aiCommentTranslationEnabled, shareEnabled, commentFreeCopyEnabled,
+                    modernLiveEnabled,
                     modernGameCenterEnabled, modernMessageTopRightEnabled,
                     modernStoryEnabled, source);
         }
@@ -313,6 +328,7 @@ public final class SettingsManager {
             boolean aiSubtitleEnabled,
             boolean aiCommentTranslationEnabled,
             boolean shareEnabled,
+            boolean commentFreeCopyEnabled,
             boolean modernLiveEnabled,
             boolean modernGameCenterEnabled,
             boolean modernMessageTopRightEnabled,
@@ -328,6 +344,7 @@ public final class SettingsManager {
                 || this.aiSubtitleEnabled != aiSubtitleEnabled
                 || this.aiCommentTranslationEnabled != aiCommentTranslationEnabled
                 || systemShareEnabled != shareEnabled
+                || this.commentFreeCopyEnabled != commentFreeCopyEnabled
                 || this.modernLiveEnabled != modernLiveEnabled
                 || this.modernGameCenterEnabled != modernGameCenterEnabled
                 || this.modernMessageTopRightEnabled != modernMessageTopRightEnabled
@@ -341,6 +358,7 @@ public final class SettingsManager {
         this.aiSubtitleEnabled = aiSubtitleEnabled;
         this.aiCommentTranslationEnabled = aiCommentTranslationEnabled;
         systemShareEnabled = shareEnabled;
+        this.commentFreeCopyEnabled = commentFreeCopyEnabled;
         this.modernLiveEnabled = modernLiveEnabled;
         this.modernGameCenterEnabled = modernGameCenterEnabled;
         this.modernMessageTopRightEnabled = modernMessageTopRightEnabled;
@@ -358,6 +376,7 @@ public final class SettingsManager {
                 + " aiSubtitle=" + aiSubtitleEnabled
                 + " aiCommentTranslation=" + aiCommentTranslationEnabled
                 + " systemShare=" + shareEnabled
+                + " commentFreeCopy=" + commentFreeCopyEnabled
                 + " modernLive=" + modernLiveEnabled
                 + " modernGameCenter=" + modernGameCenterEnabled
                 + " modernMessageTopRight=" + modernMessageTopRightEnabled
@@ -431,6 +450,10 @@ public final class SettingsManager {
 
     public boolean isSystemShareEnabled() {
         return systemShareEnabled;
+    }
+
+    public boolean isCommentFreeCopyEnabled() {
+        return commentFreeCopyEnabled;
     }
 
     public boolean isModernLiveEnabled() {
