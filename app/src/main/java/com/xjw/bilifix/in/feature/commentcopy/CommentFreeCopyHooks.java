@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.xjw.bilifix.in.core.HookApi;
 
@@ -53,14 +54,17 @@ public final class CommentFreeCopyHooks {
     private void installModernAdapterHook() throws Throwable {
         Class<?> adapterClass = findModernAdapterClass();
         Class<?> menuItemClass = module.load(classLoader, COMMENT_MENU_ITEM);
+        Class<?> dialogClass = module.load(classLoader, COMMENT_MENU_DIALOG);
         Class<?> functionClass = module.load(classLoader,
                 "kotlin.jvm.functions.Function1");
         Field itemsField = findDeclaredFieldByType(adapterClass, List.class);
         Field callbackField = findDeclaredFieldByType(adapterClass, functionClass);
+        Field dialogCallbackField = findDeclaredFieldByType(dialogClass, functionClass);
         Field actionField = findEnumField(menuItemClass);
         Method invokeCallback = module.declaredMethod(
                 functionClass, "invoke", Object.class);
         Method bind = findBindMethod(adapterClass);
+        Method dismissDialog = module.publicMethod(dialogClass, "dismiss");
         Field itemViewField = findField(bind.getParameterTypes()[0], "itemView");
 
         module.info("comment free copy symbols resolved structurally: adapter="
@@ -110,21 +114,38 @@ public final class CommentFreeCopyHooks {
                 module.info("comment free copy COPY row clicked: enabled="
                         + module.isCommentFreeCopyEnabled()
                         + " sample=" + clickSequence);
-                try {
-                    module.invoke(invokeCallback, callback, action);
-                } catch (Throwable throwable) {
-                    module.error("comment free copy host callback failed", throwable);
-                    return;
-                }
                 if (!module.isCommentFreeCopyEnabled()) {
+                    try {
+                        module.invoke(invokeCallback, callback, action);
+                    } catch (Throwable throwable) {
+                        module.error("comment free copy host callback failed", throwable);
+                    }
                     return;
                 }
-                // The host callback copies synchronously and dismisses its bottom sheet.
-                // Do not post on itemView: the dismissal detaches it and can discard its
-                // pending callbacks. Use the main looper independently of the removed row.
-                Context dialogContext = clicked.getContext();
-                mainHandler.postDelayed(
-                        () -> showClipboardDialog(dialogContext), 100L);
+                try {
+                    Object dialog = findCapturedValue(callback, dialogClass);
+                    Object actionCallback = dialog == null
+                            ? null : dialogCallbackField.get(dialog);
+                    String text = findSingleCapturedString(actionCallback);
+                    if (dialog == null || text == null || text.isEmpty()) {
+                        module.warn("comment free copy text unavailable: wrapper="
+                                + callback.getClass().getName() + " dialog="
+                                + (dialog == null ? "null" : dialog.getClass().getName())
+                                + " actionCallback=" + (actionCallback == null
+                                ? "null" : actionCallback.getClass().getName()));
+                        Toast.makeText(clicked.getContext(),
+                                "无法读取评论内容", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    module.invoke(dismissDialog, dialog);
+                    Context dialogContext = clicked.getContext();
+                    mainHandler.postDelayed(
+                            () -> showSelectableTextDialog(dialogContext, text), 100L);
+                } catch (Throwable throwable) {
+                    module.error("comment free copy direct text extraction failed", throwable);
+                    Toast.makeText(clicked.getContext(),
+                            "无法读取评论内容", Toast.LENGTH_SHORT).show();
+                }
             });
             return result;
         });
@@ -266,6 +287,19 @@ public final class CommentFreeCopyHooks {
                 return;
             }
 
+            showSelectableTextDialog(context, text);
+        } catch (Throwable throwable) {
+            module.error("comment free copy clipboard fallback failed", throwable);
+        }
+    }
+
+    private void showSelectableTextDialog(Context context, CharSequence text) {
+        try {
+            if (context == null || text == null || text.length() == 0
+                    || !module.isCommentFreeCopyEnabled()) {
+                return;
+            }
+
             int theme = context.getResources().getIdentifier(
                     "AppTheme.Dialog.Alert", "style", context.getPackageName());
             AlertDialog.Builder builder = theme == 0
@@ -295,6 +329,62 @@ public final class CommentFreeCopyHooks {
         } catch (Throwable throwable) {
             module.error("comment free copy dialog failed", throwable);
         }
+    }
+
+    private static Object findCapturedValue(Object receiver, Class<?> expectedType) {
+        if (receiver == null || expectedType == null) {
+            return null;
+        }
+        Class<?> current = receiver.getClass();
+        while (current != null) {
+            for (Field field : current.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(receiver);
+                    if (expectedType.isInstance(value)) {
+                        return value;
+                    }
+                } catch (Throwable ignored) {
+                    // Continue searching other captured fields.
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private static String findSingleCapturedString(Object receiver) {
+        if (receiver == null) {
+            return null;
+        }
+        String match = null;
+        Class<?> current = receiver.getClass();
+        while (current != null) {
+            for (Field field : current.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())
+                        || field.getType() != String.class) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(receiver);
+                    if (!(value instanceof String) || ((String) value).isEmpty()) {
+                        continue;
+                    }
+                    if (match != null) {
+                        return null;
+                    }
+                    match = (String) value;
+                } catch (Throwable ignored) {
+                    // Continue searching other captured fields.
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return match;
     }
 
     private static Method findBindMethod(Class<?> adapterClass)
