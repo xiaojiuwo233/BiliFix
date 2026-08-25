@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Restores Opus cards filtered from the legacy client's dynamic feeds. */
 public final class DynamicArticleIdentityHooks {
+    private static final String FAWKES_POLICY = "preserve-host-appkey";
     private static final String DYNAMIC_SERVICE =
             "bilibili.app.dynamic.v2.Dynamic/";
     private static final Set<String> DYNAMIC_READ_METHODS = immutableSet(
@@ -40,7 +41,9 @@ public final class DynamicArticleIdentityHooks {
             Collections.synchronizedMap(new WeakHashMap<>());
     private final AtomicInteger requestLogCount = new AtomicInteger();
     private final AtomicInteger identityLogCount = new AtomicInteger();
+    private final AtomicInteger followingRequestLogCount = new AtomicInteger();
     private final AtomicInteger followingResponseLogCount = new AtomicInteger();
+    private final AtomicInteger followingFailureLogCount = new AtomicInteger();
 
     public DynamicArticleIdentityHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
@@ -67,12 +70,30 @@ public final class DynamicArticleIdentityHooks {
         Method suspendDynAll = module.declaredMethod(
                 serviceKtxClass, "suspendDynAll",
                 mossClass, requestClass, continuationClass);
+        Method getPage = module.publicMethod(requestClass, "getPage");
+        Method getRefreshTypeValue = module.publicMethod(
+                requestClass, "getRefreshTypeValue");
+        Method getOffset = module.publicMethod(requestClass, "getOffset");
+        Method getUpdateBaseline = module.publicMethod(
+                requestClass, "getUpdateBaseline");
         module.deoptimizeFeatureMethod(suspendDynAll);
 
-        module.addHook("Dynamic article following suspendDynAll", suspendDynAll,
-                hookChain -> withFollowingFeedScope(
-                        "following DynamicMossKtxKt.suspendDynAll",
-                        true, hookChain::proceed));
+        module.addHook("Dynamic article following suspendDynAll", suspendDynAll, hookChain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (module.isDynamicArticleFixEnabled() && module.isVerboseLoggingEnabled()) {
+                try {
+                    logFollowingRequest(
+                            hookChain.getArg(1), getPage, getRefreshTypeValue,
+                            getOffset, getUpdateBaseline);
+                } catch (Throwable throwable) {
+                    module.debug("Dynamic article following request diagnostics failed: "
+                            + throwable.getClass().getName());
+                }
+            }
+            return withFollowingFeedScope(
+                    "following DynamicMossKtxKt.suspendDynAll",
+                    false, hookChain::proceed);
+        });
     }
 
     private void installFollowingFeedLoadScope() throws Throwable {
@@ -87,20 +108,28 @@ public final class DynamicArticleIdentityHooks {
         module.addHook("Dynamic article following page load", loadRemoteData,
                 hookChain -> withFollowingFeedScope(
                         "following SynthesisTabLoadModel.loadRemoteData",
-                        false, hookChain::proceed));
+                        true, hookChain::proceed));
     }
 
     private Object withFollowingFeedScope(
-            String source, boolean logRequest, ThrowingSupplier action)
+            String source, boolean logFailure, ThrowingSupplier action)
             throws Throwable {
         module.ensureFeatureSettings(currentApplication());
         if (!module.isDynamicArticleFixEnabled()) {
             return action.get();
         }
-        if (logRequest) {
-            logTargetRequest(source);
+        try {
+            return withScope(source, action);
+        } catch (Throwable throwable) {
+            if (logFailure && module.isVerboseLoggingEnabled()) {
+                try {
+                    logFollowingFailure(source, throwable);
+                } catch (Throwable ignored) {
+                    // Diagnostics must never replace the original host exception.
+                }
+            }
+            throw throwable;
         }
-        return withScope(source, action);
     }
 
     private void installFollowingFeedDiagnostics() throws Throwable {
@@ -115,37 +144,56 @@ public final class DynamicArticleIdentityHooks {
                 modelClass, "S", replyClass, int.class);
         Method getDynamicList = module.publicMethod(replyClass, "getDynamicList");
         Method getListCount = module.publicMethod(dynamicListClass, "getListCount");
+        Method getHasMore = module.publicMethod(dynamicListClass, "getHasMore");
+        Method getHistoryOffset = module.publicMethod(
+                dynamicListClass, "getHistoryOffset");
+        Method getUpdateBaseline = module.publicMethod(
+                dynamicListClass, "getUpdateBaseline");
         module.deoptimizeFeatureMethod(consumeResponse);
 
         module.addHook("Dynamic article following response", consumeResponse, hookChain -> {
+            Object result = hookChain.proceed();
             module.ensureFeatureSettings(currentApplication());
-            if (module.isDynamicArticleFixEnabled()) {
-                Object reply = hookChain.getArg(0);
-                int itemCount = -1;
-                if (reply != null) {
-                    Object dynamicList = module.invoke(getDynamicList, reply);
-                    if (dynamicList != null) {
-                        Object count = module.invoke(getListCount, dynamicList);
-                        if (count instanceof Number) {
-                            itemCount = ((Number) count).intValue();
+            if (module.isDynamicArticleFixEnabled() && module.isVerboseLoggingEnabled()) {
+                try {
+                    Object reply = hookChain.getArg(0);
+                    int itemCount = -1;
+                    boolean hasMore = false;
+                    int historyOffsetLength = -1;
+                    int updateBaselineLength = -1;
+                    if (reply != null) {
+                        Object dynamicList = module.invoke(getDynamicList, reply);
+                        if (dynamicList != null) {
+                            Object count = module.invoke(getListCount, dynamicList);
+                            if (count instanceof Number) {
+                                itemCount = ((Number) count).intValue();
+                            }
+                            hasMore = Boolean.TRUE.equals(
+                                    module.invoke(getHasMore, dynamicList));
+                            historyOffsetLength = stringLength(
+                                    module.invoke(getHistoryOffset, dynamicList));
+                            updateBaselineLength = stringLength(
+                                    module.invoke(getUpdateBaseline, dynamicList));
                         }
                     }
-                }
-                int sequence = followingResponseLogCount.incrementAndGet();
-                if (shouldSample(sequence, 20, 100)) {
-                    String message = "Dynamic article following response: items=" + itemCount
-                            + " page=" + hookChain.getArg(1)
-                            + " targetIdentity="
-                            + DynamicArticleRequestIdentity.targetIdentity(true)
-                            + " sample=" + sequence;
-                    if (itemCount == 0) {
-                        module.warn(message);
-                    } else {
-                        module.info(message);
+                    int sequence = followingResponseLogCount.incrementAndGet();
+                    if (shouldSample(sequence, 20, 100)) {
+                        module.debug("Dynamic article following response: items=" + itemCount
+                                + " page=" + hookChain.getArg(1)
+                                + " hasMore=" + hasMore
+                                + " historyOffsetLength=" + historyOffsetLength
+                                + " updateBaselineLength=" + updateBaselineLength
+                                + " contentIdentity="
+                                + DynamicArticleRequestIdentity.targetIdentity(true)
+                                + " fawkes=" + FAWKES_POLICY
+                                + " sample=" + sequence);
                     }
+                } catch (Throwable throwable) {
+                    module.debug("Dynamic article following response diagnostics failed: "
+                            + throwable.getClass().getName());
                 }
             }
-            return hookChain.proceed();
+            return result;
         });
     }
 
@@ -167,7 +215,7 @@ public final class DynamicArticleIdentityHooks {
                 identity::rewriteDevice);
         installIdentityHook(
                 "Dynamic article Moss Fawkes", createFawkes,
-                identity::rewriteFawkes);
+                identity::preserveFawkes);
 
         Class<?> descriptorClass = module.load(classLoader, "io.grpc.MethodDescriptor");
         Class<?> generatedMessageClass = module.load(
@@ -206,12 +254,16 @@ public final class DynamicArticleIdentityHooks {
             try {
                 DynamicArticleRequestIdentity.RewriteResult rewritten =
                         rewriter.rewrite((byte[]) result);
-                int sequence = identityLogCount.incrementAndGet();
-                if (shouldSample(sequence, 20, 100)) {
-                    module.debug(label + " rewritten: source=" + source
-                            + " oldIdentity=" + rewritten.originalIdentity
-                            + " newIdentity=" + rewritten.rewrittenIdentity
-                            + " bytes=" + rewritten.bytes.length);
+                if (module.isVerboseLoggingEnabled()) {
+                    int sequence = identityLogCount.incrementAndGet();
+                    if (shouldSample(sequence, 20, 100)) {
+                        module.debug(label
+                                + (rewritten.changed ? " rewritten" : " preserved")
+                                + ": source=" + source
+                                + " oldIdentity=" + rewritten.originalIdentity
+                                + " newIdentity=" + rewritten.rewrittenIdentity
+                                + " bytes=" + rewritten.bytes.length);
+                    }
                 }
                 return rewritten.bytes;
             } catch (Throwable throwable) {
@@ -278,19 +330,16 @@ public final class DynamicArticleIdentityHooks {
             Object result = hookChain.proceed();
             module.ensureFeatureSettings(currentApplication());
             Object reply = hookChain.getThisObject();
-            if (!module.isDynamicArticleFixEnabled() || reply == null || !markReply(reply)) {
+            if (!module.isDynamicArticleFixEnabled() || !module.isVerboseLoggingEnabled()
+                    || reply == null || !markReply(reply)) {
                 return result;
             }
             int itemCount = result instanceof java.util.List
                     ? ((java.util.List<?>) result).size() : -1;
-            String message = "Dynamic article DynSpace response: items=" + itemCount
-                    + " targetIdentity="
-                    + DynamicArticleRequestIdentity.targetIdentity(true);
-            if (itemCount == 0) {
-                module.warn(message);
-            } else {
-                module.info(message);
-            }
+            module.debug("Dynamic article DynSpace response: items=" + itemCount
+                    + " contentIdentity="
+                    + DynamicArticleRequestIdentity.targetIdentity(true)
+                    + " fawkes=" + FAWKES_POLICY);
             return result;
         });
     }
@@ -306,13 +355,105 @@ public final class DynamicArticleIdentityHooks {
     }
 
     private void logTargetRequest(String source) {
+        if (!module.isVerboseLoggingEnabled()) {
+            return;
+        }
         int sequence = requestLogCount.incrementAndGet();
         if (shouldSample(sequence, 20, 100)) {
-            module.info("Dynamic article compatible identity enabled: source=" + source
-                    + " targetIdentity="
+            module.debug("Dynamic article compatible identity enabled: source=" + source
+                    + " contentIdentity="
                     + DynamicArticleRequestIdentity.targetIdentity(true)
+                    + " fawkes=" + FAWKES_POLICY
                     + " sample=" + sequence);
         }
+    }
+
+    private void logFollowingRequest(
+            Object request,
+            Method getPage,
+            Method getRefreshTypeValue,
+            Method getOffset,
+            Method getUpdateBaseline) throws Throwable {
+        int sequence = followingRequestLogCount.incrementAndGet();
+        if (!shouldSample(sequence, 20, 100)) {
+            return;
+        }
+        module.debug("Dynamic article following request: page="
+                + module.invoke(getPage, request)
+                + " refreshType=" + module.invoke(getRefreshTypeValue, request)
+                + " offsetLength=" + stringLength(module.invoke(getOffset, request))
+                + " updateBaselineLength="
+                + stringLength(module.invoke(getUpdateBaseline, request))
+                + " contentIdentity="
+                + DynamicArticleRequestIdentity.targetIdentity(true)
+                + " fawkes=" + FAWKES_POLICY
+                + " sample=" + sequence);
+    }
+
+    private void logFollowingFailure(String source, Throwable throwable) {
+        int sequence = followingFailureLogCount.incrementAndGet();
+        if (!shouldSample(sequence, 20, 100)) {
+            return;
+        }
+        module.debug("Dynamic article following request failed: source=" + source
+                + " throwable=" + describeThrowableChain(throwable)
+                + " contentIdentity="
+                + DynamicArticleRequestIdentity.targetIdentity(true)
+                + " fawkes=" + FAWKES_POLICY
+                + " sample=" + sequence);
+    }
+
+    private String describeThrowableChain(Throwable throwable) {
+        StringBuilder description = new StringBuilder();
+        Throwable current = throwable;
+        int depth = 0;
+        while (current != null && depth < 4) {
+            if (depth > 0) {
+                description.append(" <- ");
+            }
+            description.append(current.getClass().getName());
+            appendBusinessDetails(description, current);
+            String message = current.getMessage();
+            if (message != null && !message.isEmpty()) {
+                description.append(" message=").append(limit(message, 240));
+            }
+            Throwable next = current.getCause();
+            if (next == current) {
+                break;
+            }
+            current = next;
+            depth++;
+        }
+        return description.toString();
+    }
+
+    private void appendBusinessDetails(StringBuilder description, Throwable throwable) {
+        if (!"com.bilibili.lib.moss.api.BusinessException"
+                .equals(throwable.getClass().getName())) {
+            return;
+        }
+        try {
+            Method getCode = module.publicMethod(throwable.getClass(), "getCode");
+            Method getReason = module.publicMethod(throwable.getClass(), "getReason");
+            description.append(" code=").append(module.invoke(getCode, throwable));
+            Object reason = module.invoke(getReason, throwable);
+            if (reason != null && !String.valueOf(reason).isEmpty()) {
+                description.append(" reason=").append(limit(String.valueOf(reason), 160));
+            }
+        } catch (Throwable inspectionError) {
+            description.append(" businessDetailsUnavailable=")
+                    .append(inspectionError.getClass().getSimpleName());
+        }
+    }
+
+    private static int stringLength(Object value) {
+        return value == null ? -1 : String.valueOf(value).length();
+    }
+
+    private static String limit(String value, int maxLength) {
+        String singleLine = value.replace('\n', ' ').replace('\r', ' ');
+        return singleLine.length() <= maxLength
+                ? singleLine : singleLine.substring(0, maxLength) + "...";
     }
 
     private Object withScope(String source, ThrowingSupplier action) throws Throwable {
