@@ -188,8 +188,8 @@ public final class DynamicArticleIdentityHooks {
                                 + " hasMore=" + hasMore
                                 + " historyOffsetLength=" + historyOffsetLength
                                 + " updateBaselineLength=" + updateBaselineLength
-                                + " contentIdentity="
-                                + DynamicArticleRequestIdentity.targetIdentity(true)
+                                + " targetVersion="
+                                + DynamicArticleRequestIdentity.targetVersion()
                                 + " fawkes=" + FAWKES_POLICY
                                 + " sample=" + sequence);
                     }
@@ -481,8 +481,8 @@ public final class DynamicArticleIdentityHooks {
             int itemCount = result instanceof java.util.List
                     ? ((java.util.List<?>) result).size() : -1;
             module.debug("Dynamic article DynSpace response: items=" + itemCount
-                    + " contentIdentity="
-                    + DynamicArticleRequestIdentity.targetIdentity(true)
+                    + " targetVersion="
+                    + DynamicArticleRequestIdentity.targetVersion()
                     + " fawkes=" + FAWKES_POLICY);
             return result;
         });
@@ -505,8 +505,8 @@ public final class DynamicArticleIdentityHooks {
         int sequence = requestLogCount.incrementAndGet();
         if (shouldSample(sequence, 20, 100)) {
             module.debug("Dynamic article compatible identity enabled: source=" + source
-                    + " contentIdentity="
-                    + DynamicArticleRequestIdentity.targetIdentity(true)
+                    + " targetVersion="
+                    + DynamicArticleRequestIdentity.targetVersion()
                     + " fawkes=" + FAWKES_POLICY
                     + " sample=" + sequence);
         }
@@ -528,8 +528,8 @@ public final class DynamicArticleIdentityHooks {
                 + " offsetLength=" + stringLength(module.invoke(getOffset, request))
                 + " updateBaselineLength="
                 + stringLength(module.invoke(getUpdateBaseline, request))
-                + " contentIdentity="
-                + DynamicArticleRequestIdentity.targetIdentity(true)
+                + " targetVersion="
+                + DynamicArticleRequestIdentity.targetVersion()
                 + " fawkes=" + FAWKES_POLICY
                 + " sample=" + sequence);
     }
@@ -541,8 +541,8 @@ public final class DynamicArticleIdentityHooks {
         }
         module.debug("Dynamic article following request failed: source=" + source
                 + " throwable=" + describeThrowableChain(throwable)
-                + " contentIdentity="
-                + DynamicArticleRequestIdentity.targetIdentity(true)
+                + " targetVersion="
+                + DynamicArticleRequestIdentity.targetVersion()
                 + " fawkes=" + FAWKES_POLICY
                 + " sample=" + sequence);
     }

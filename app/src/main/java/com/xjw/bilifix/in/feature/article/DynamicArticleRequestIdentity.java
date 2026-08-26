@@ -4,13 +4,9 @@ import com.xjw.bilifix.in.core.HookApi;
 
 import java.lang.reflect.Method;
 
-/** Supplies a compatible domestic identity while loading dynamic cards. */
 final class DynamicArticleRequestIdentity {
-    static final String MOBI_APP = "android";
-    static final int BUILD = 8880300;
-    static final int APP_ID = 1;
-    static final String VERSION_NAME = "8.88.0";
-    static final String CHANNEL = "master";
+    static final int BUILD = 9060400;
+    static final String VERSION_NAME = "6.2.6";
 
     private final ProtoIdentityRewriter metadata;
     private final ProtoIdentityRewriter device;
@@ -37,12 +33,9 @@ final class DynamicArticleRequestIdentity {
         return fawkes.inspect(source);
     }
 
-    static String targetIdentity(boolean includeDeviceDetails) {
-        String value = MOBI_APP + "/" + BUILD + "/" + CHANNEL;
-        if (includeDeviceDetails) {
-            value += "/appId=" + APP_ID + "/version=" + VERSION_NAME;
-        }
-        return value;
+    /** Describes the version override applied to dynamic read requests. */
+    static String targetVersion() {
+        return BUILD + "/" + VERSION_NAME;
     }
 
     private static final class ProtoIdentityRewriter {
@@ -55,10 +48,7 @@ final class DynamicArticleRequestIdentity {
         private final Method getAppId;
         private final Method getVersionName;
         private final Method toBuilder;
-        private final Method setMobiApp;
         private final Method setBuild;
-        private final Method setChannel;
-        private final Method setAppId;
         private final Method setVersionName;
         private final Method build;
         private final Method toByteArray;
@@ -81,11 +71,7 @@ final class DynamicArticleRequestIdentity {
             getVersionName = includesVersionName
                     ? module.publicMethod(messageClass, "getVersionName") : null;
             toBuilder = module.publicMethod(messageClass, "toBuilder");
-            setMobiApp = module.publicMethod(builderClass, "setMobiApp", String.class);
             setBuild = module.publicMethod(builderClass, "setBuild", int.class);
-            setChannel = module.publicMethod(builderClass, "setChannel", String.class);
-            setAppId = includesVersionName
-                    ? module.publicMethod(builderClass, "setAppId", int.class) : null;
             setVersionName = includesVersionName
                     ? module.publicMethod(builderClass, "setVersionName", String.class) : null;
             build = module.publicMethod(builderClass, "build");
@@ -94,21 +80,11 @@ final class DynamicArticleRequestIdentity {
 
         private RewriteResult rewrite(byte[] source) throws Throwable {
             Object message = module.invoke(parseFrom, null, (Object) source);
-            String originalIdentity = module.invoke(getMobiApp, message)
-                    + "/" + module.invoke(getBuild, message)
-                    + "/" + module.invoke(getChannel, message);
-            if (includesVersionName) {
-                Object appId = module.invoke(getAppId, message);
-                originalIdentity += "/appId=" + appId
-                        + "/version=" + module.invoke(getVersionName, message);
-            }
+            String originalIdentity = describe(message);
 
             Object builder = module.invoke(toBuilder, message);
-            module.invoke(setMobiApp, builder, MOBI_APP);
             module.invoke(setBuild, builder, BUILD);
-            module.invoke(setChannel, builder, CHANNEL);
             if (includesVersionName) {
-                module.invoke(setAppId, builder, APP_ID);
                 module.invoke(setVersionName, builder, VERSION_NAME);
             }
             Object rewritten = module.invoke(build, builder);
@@ -117,8 +93,19 @@ final class DynamicArticleRequestIdentity {
                 throw new IllegalStateException("toByteArray returned " + summarize(bytes));
             }
             return new RewriteResult(
-                    (byte[]) bytes, originalIdentity,
-                    targetIdentity(includesVersionName));
+                    (byte[]) bytes, originalIdentity, describe(rewritten));
+        }
+
+        /** Reads the identity actually carried by a message, so logs cannot drift. */
+        private String describe(Object message) throws Throwable {
+            String value = module.invoke(getMobiApp, message)
+                    + "/" + module.invoke(getBuild, message)
+                    + "/" + module.invoke(getChannel, message);
+            if (includesVersionName) {
+                value += "/appId=" + module.invoke(getAppId, message)
+                        + "/version=" + module.invoke(getVersionName, message);
+            }
+            return value;
         }
     }
 
