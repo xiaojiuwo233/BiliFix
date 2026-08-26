@@ -20,7 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Supplies a compatible request identity needed by the host's existing IP location UI. */
 public final class IpLocationHooks {
+    private static final String FAWKES_POLICY = "preserve-host-appkey";
     private static final String PROFILE_MOBI_APP = "android";
+    private static final int PROFILE_BUILD = 8880300;
+    private static final String PROFILE_VERSION_NAME = "8.88.0";
+    private static final String PROFILE_CHANNEL = "master";
+    private static final String PROFILE_STATISTICS =
+            "{\"appId\":1,\"platform\":3,\"version\":\"8.88.0\",\"abtest\":\"\"}";
     private static final String COMMENT_MOBI_APP = "android_hd";
     private static final int COMMENT_BUILD = 2001100;
     private static final int COMMENT_APP_ID = 5;
@@ -143,7 +149,11 @@ public final class IpLocationHooks {
                     ? PROFILE_MOBI_APP : COMMENT_MOBI_APP;
             parameters.put("mobi_app", mobiApp);
             parameters.put("appkey", module.invoke(domesticAppKey, null, mobiApp));
-            if (scope.kind == ScopeKind.COMMENT_REST) {
+            if (scope.kind == ScopeKind.PROFILE_REST) {
+                parameters.put("build", String.valueOf(PROFILE_BUILD));
+                parameters.put("channel", PROFILE_CHANNEL);
+                parameters.put("statistics", PROFILE_STATISTICS);
+            } else {
                 parameters.put("build", String.valueOf(COMMENT_BUILD));
                 parameters.put("channel", COMMENT_CHANNEL);
             }
@@ -175,7 +185,7 @@ public final class IpLocationHooks {
                 module, classLoader, "com.bapis.bilibili.metadata.Metadata", false);
         ProtoIdentityRewriter device = new ProtoIdentityRewriter(
                 module, classLoader, "com.bapis.bilibili.metadata.device.Device", true);
-        ProtoFawkesRewriter fawkes = new ProtoFawkesRewriter(
+        ProtoFawkesInspector fawkes = new ProtoFawkesInspector(
                 module, classLoader,
                 "com.bapis.bilibili.metadata.fawkes.FawkesReq");
 
@@ -226,7 +236,7 @@ public final class IpLocationHooks {
 
     private void installMossGrpcHeaderRewrites(
             ProtoIdentityRewriter metadata, ProtoIdentityRewriter device,
-            ProtoFawkesRewriter fawkes) throws Throwable {
+            ProtoFawkesInspector fawkes) throws Throwable {
         Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
         Class<?> headerKeyClass = module.load(classLoader, "io.grpc.n0$h");
         Method headerGet = module.declaredMethod(headersClass, "g", headerKeyClass);
@@ -291,7 +301,7 @@ public final class IpLocationHooks {
             return;
         }
         ProtoRewriteResult rewritten = rewrite.rewriter.rewrite((byte[]) current);
-        boolean repaired = !rewritten.originalIdentity.equals(rewritten.rewrittenIdentity);
+        boolean repaired = rewritten.changed;
         if (repaired) {
             // Reaching here means the factory hook did not run for this request, which is the
             // long-uptime failure mode this rewrite exists to cover.
@@ -306,13 +316,15 @@ public final class IpLocationHooks {
                     + rewrite.headerName + " source=" + scope.source
                     + " identity=" + rewritten.rewrittenIdentity);
         }
-        module.invoke(access.discard, headers, key);
-        module.invoke(access.put, headers, key, rewritten.bytes);
+        if (rewritten.changed) {
+            module.invoke(access.discard, headers, key);
+            module.invoke(access.put, headers, key, rewritten.bytes);
+        }
     }
 
     private void installEncodedMossHeaderHooks(
             Class<?> metadataFactoryClass, ProtoIdentityRewriter metadata,
-            ProtoIdentityRewriter device, ProtoFawkesRewriter fawkes) throws Throwable {
+            ProtoIdentityRewriter device, ProtoFawkesInspector fawkes) throws Throwable {
         Method createEncodedMetadata = module.declaredMethod(metadataFactoryClass, "f");
         Method createEncodedDevice = module.declaredMethod(metadataFactoryClass, "c");
         Method createEncodedFawkes = module.declaredMethod(metadataFactoryClass, "b");
@@ -361,7 +373,9 @@ public final class IpLocationHooks {
             try {
                 ProtoRewriteResult rewritten = rewriter.rewrite((byte[]) result);
                 if (shouldSample(logCount.incrementAndGet(), 30, 100)) {
-                    module.debug(label + " rewritten: source=" + scope.source
+                    module.debug(label
+                            + (rewritten.changed ? " rewritten" : " preserved")
+                            + ": source=" + scope.source
                             + " oldIdentity=" + rewritten.originalIdentity
                             + " newIdentity=" + rewritten.rewrittenIdentity
                             + " bytes=" + rewritten.bytes.length);
@@ -392,6 +406,13 @@ public final class IpLocationHooks {
                     throw new IllegalStateException("decode returned " + summarize(decoded));
                 }
                 ProtoRewriteResult rewritten = rewriter.rewrite((byte[]) decoded);
+                if (!rewritten.changed) {
+                    if (shouldSample(logCount.incrementAndGet(), 30, 100)) {
+                        module.debug(label + " preserved: source=" + scope.source
+                                + " identity=" + rewritten.rewrittenIdentity);
+                    }
+                    return result;
+                }
                 Object encoded = module.invoke(
                         encodeHeader, codec, (Object) rewritten.bytes);
                 if (!(encoded instanceof String)) {
@@ -771,7 +792,12 @@ public final class IpLocationHooks {
 
     private static String rewriteRestUserAgent(String original, ScopeKind kind) {
         if (kind == ScopeKind.PROFILE_REST) {
-            return original.replace("mobi_app/android_i", "mobi_app/android");
+            return original
+                    .replace("BiliDroid/3.20.4", "BiliDroid/" + PROFILE_VERSION_NAME)
+                    .replace("mobi_app/android_i", "mobi_app/" + PROFILE_MOBI_APP)
+                    .replace("build/8230800", "build/" + PROFILE_BUILD)
+                    .replace("innerVer/8230800", "innerVer/" + PROFILE_BUILD)
+                    .replace("channel/biliintl", "channel/" + PROFILE_CHANNEL);
         }
         return original
                 .replace("BiliDroid/3.20.4", "BiliDroid/" + COMMENT_VERSION_NAME)
@@ -800,10 +826,13 @@ public final class IpLocationHooks {
         int sequence = requestLogCount.incrementAndGet();
         if (shouldSample(sequence, 30, 100)) {
             String identity = kind == ScopeKind.PROFILE_REST
-                    ? PROFILE_MOBI_APP + "/host-build"
+                    ? profileIdentity()
                     : commentIdentity(false);
             module.info("IP location compatible identity enabled: source=" + source
-                    + " identity=" + identity + " sample=" + sequence);
+                    + " identity=" + identity
+                    + (kind == ScopeKind.COMMENT_RPC
+                    ? " fawkes=" + FAWKES_POLICY : "")
+                    + " sample=" + sequence);
         }
     }
 
@@ -858,6 +887,11 @@ public final class IpLocationHooks {
             identity += "/appId=" + COMMENT_APP_ID + "/version=" + COMMENT_VERSION_NAME;
         }
         return identity;
+    }
+
+    private static String profileIdentity() {
+        return PROFILE_MOBI_APP + "/" + PROFILE_BUILD + "/" + PROFILE_CHANNEL
+                + "/appId=1/version=" + PROFILE_VERSION_NAME;
     }
 
     private enum ScopeKind {
@@ -1008,45 +1042,32 @@ public final class IpLocationHooks {
         }
     }
 
-    private static final class ProtoFawkesRewriter implements ProtoRewriter {
+    private static final class ProtoFawkesInspector implements ProtoRewriter {
         private final HookApi module;
         private final Method parseFrom;
         private final Method getAppkey;
-        private final Method toBuilder;
-        private final Method setAppkey;
-        private final Method build;
-        private final Method toByteArray;
 
-        private ProtoFawkesRewriter(
+        private ProtoFawkesInspector(
                 HookApi module, ClassLoader classLoader, String messageClassName)
                 throws Throwable {
             this.module = module;
             Class<?> messageClass = module.load(classLoader, messageClassName);
-            Class<?> builderClass = module.load(classLoader, messageClassName + "$b");
             parseFrom = module.publicMethod(messageClass, "parseFrom", byte[].class);
             getAppkey = module.publicMethod(messageClass, "getAppkey");
-            toBuilder = module.publicMethod(messageClass, "toBuilder");
-            setAppkey = module.publicMethod(builderClass, "setAppkey", String.class);
-            build = module.publicMethod(builderClass, "build");
-            toByteArray = module.publicMethod(messageClass, "toByteArray");
         }
 
         @Override
         public ProtoRewriteResult rewrite(byte[] source) throws Throwable {
+            if (!module.isVerboseLoggingEnabled()) {
+                return new ProtoRewriteResult(
+                        source, "appkey=<host-preserved>",
+                        "appkey=<host-preserved>", false);
+            }
             Object message = module.invoke(parseFrom, null, (Object) source);
             String originalAppkey = String.valueOf(module.invoke(getAppkey, message));
-            Object builder = module.invoke(toBuilder, message);
-            module.invoke(setAppkey, builder, COMMENT_MOBI_APP);
-            Object rewrittenMessage = module.invoke(build, builder);
-            Object rewrittenBytes = module.invoke(toByteArray, rewrittenMessage);
-            if (!(rewrittenBytes instanceof byte[])) {
-                throw new IllegalStateException("toByteArray returned "
-                        + summarize(rewrittenBytes));
-            }
+            String identity = "appkey=" + originalAppkey;
             return new ProtoRewriteResult(
-                    (byte[]) rewrittenBytes,
-                    "appkey=" + originalAppkey,
-                    "appkey=" + COMMENT_MOBI_APP);
+                    source, identity, identity, false);
         }
     }
 
@@ -1054,12 +1075,21 @@ public final class IpLocationHooks {
         private final byte[] bytes;
         private final String originalIdentity;
         private final String rewrittenIdentity;
+        private final boolean changed;
 
         private ProtoRewriteResult(
                 byte[] bytes, String originalIdentity, String rewrittenIdentity) {
+            this(bytes, originalIdentity, rewrittenIdentity,
+                    !originalIdentity.equals(rewrittenIdentity));
+        }
+
+        private ProtoRewriteResult(
+                byte[] bytes, String originalIdentity, String rewrittenIdentity,
+                boolean changed) {
             this.bytes = bytes;
             this.originalIdentity = originalIdentity;
             this.rewrittenIdentity = rewrittenIdentity;
+            this.changed = changed;
         }
     }
 
