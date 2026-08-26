@@ -53,7 +53,7 @@ public final class AiSubtitleHooks {
         installIdentityHook(
                 "AI subtitle Moss device", createDevice, identity::rewriteDevice);
         installIdentityHook(
-                "AI subtitle Moss Fawkes", createFawkes, identity::rewriteFawkes);
+                "AI subtitle Moss Fawkes", createFawkes, identity::preserveFawkes);
 
         Class<?> descriptorClass = module.load(classLoader, "io.grpc.MethodDescriptor");
         Class<?> generatedMessageClass = module.load(
@@ -253,7 +253,7 @@ public final class AiSubtitleHooks {
         int sequence = requestLogCount.incrementAndGet();
         if (shouldSample(sequence, 20, 100)) {
             module.info("AI subtitle compatible identity enabled: source=" + source
-                    + " identity=" + SubtitleRequestIdentity.identity(true)
+                    + " targetVersion=" + SubtitleRequestIdentity.targetVersion()
                     + " request=" + request
                     + " sample=" + sequence);
         }

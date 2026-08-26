@@ -4,24 +4,21 @@ import com.xjw.bilifix.in.core.HookApi;
 
 import java.lang.reflect.Method;
 
-/** Rewrites only the Moss identity headers used while loading video subtitle metadata. */
+/** Rewrites only the Moss version headers used while loading video subtitle metadata. */
 final class SubtitleRequestIdentity {
-    static final String MOBI_APP = "android_hd";
-    static final int BUILD = 2001100;
-    static final int APP_ID = 5;
-    static final String VERSION_NAME = "2.0.1";
-    static final String CHANNEL = "master";
+    static final int BUILD = 9060400;
+    static final String VERSION_NAME = "6.2.6";
 
     private final ProtoIdentityRewriter metadata;
     private final ProtoIdentityRewriter device;
-    private final ProtoFawkesRewriter fawkes;
+    private final ProtoFawkesInspector fawkes;
 
     SubtitleRequestIdentity(HookApi module, ClassLoader classLoader) throws Throwable {
         metadata = new ProtoIdentityRewriter(
                 module, classLoader, "com.bapis.bilibili.metadata.Metadata", false);
         device = new ProtoIdentityRewriter(
                 module, classLoader, "com.bapis.bilibili.metadata.device.Device", true);
-        fawkes = new ProtoFawkesRewriter(
+        fawkes = new ProtoFawkesInspector(
                 module, classLoader, "com.bapis.bilibili.metadata.fawkes.FawkesReq");
     }
 
@@ -33,21 +30,18 @@ final class SubtitleRequestIdentity {
         return device.rewrite(source);
     }
 
-    RewriteResult rewriteFawkes(byte[] source) throws Throwable {
-        return fawkes.rewrite(source);
+    RewriteResult preserveFawkes(byte[] source) throws Throwable {
+        return fawkes.inspect(source);
     }
 
-    static String identity(boolean includeDeviceDetails) {
-        String value = MOBI_APP + "/" + BUILD + "/" + CHANNEL;
-        if (includeDeviceDetails) {
-            value += "/appId=" + APP_ID + "/version=" + VERSION_NAME;
-        }
-        return value;
+    /** Describes the version override applied to subtitle requests. */
+    static String targetVersion() {
+        return BUILD + "/" + VERSION_NAME;
     }
 
     private static final class ProtoIdentityRewriter {
         private final HookApi module;
-        private final boolean includesDeviceDetails;
+        private final boolean includesVersionName;
         private final Method parseFrom;
         private final Method getMobiApp;
         private final Method getBuild;
@@ -55,10 +49,7 @@ final class SubtitleRequestIdentity {
         private final Method getAppId;
         private final Method getVersionName;
         private final Method toBuilder;
-        private final Method setMobiApp;
         private final Method setBuild;
-        private final Method setChannel;
-        private final Method setAppId;
         private final Method setVersionName;
         private final Method build;
         private final Method toByteArray;
@@ -67,26 +58,22 @@ final class SubtitleRequestIdentity {
                 HookApi module,
                 ClassLoader classLoader,
                 String messageClassName,
-                boolean includesDeviceDetails) throws Throwable {
+                boolean includesVersionName) throws Throwable {
             this.module = module;
-            this.includesDeviceDetails = includesDeviceDetails;
+            this.includesVersionName = includesVersionName;
             Class<?> messageClass = module.load(classLoader, messageClassName);
             Class<?> builderClass = module.load(classLoader, messageClassName + "$b");
             parseFrom = module.publicMethod(messageClass, "parseFrom", byte[].class);
             getMobiApp = module.publicMethod(messageClass, "getMobiApp");
             getBuild = module.publicMethod(messageClass, "getBuild");
             getChannel = module.publicMethod(messageClass, "getChannel");
-            getAppId = includesDeviceDetails
+            getAppId = includesVersionName
                     ? module.publicMethod(messageClass, "getAppId") : null;
-            getVersionName = includesDeviceDetails
+            getVersionName = includesVersionName
                     ? module.publicMethod(messageClass, "getVersionName") : null;
             toBuilder = module.publicMethod(messageClass, "toBuilder");
-            setMobiApp = module.publicMethod(builderClass, "setMobiApp", String.class);
             setBuild = module.publicMethod(builderClass, "setBuild", int.class);
-            setChannel = module.publicMethod(builderClass, "setChannel", String.class);
-            setAppId = includesDeviceDetails
-                    ? module.publicMethod(builderClass, "setAppId", int.class) : null;
-            setVersionName = includesDeviceDetails
+            setVersionName = includesVersionName
                     ? module.publicMethod(builderClass, "setVersionName", String.class) : null;
             build = module.publicMethod(builderClass, "build");
             toByteArray = module.publicMethod(messageClass, "toByteArray");
@@ -94,20 +81,11 @@ final class SubtitleRequestIdentity {
 
         private RewriteResult rewrite(byte[] source) throws Throwable {
             Object message = module.invoke(parseFrom, null, (Object) source);
-            String originalIdentity = module.invoke(getMobiApp, message)
-                    + "/" + module.invoke(getBuild, message)
-                    + "/" + module.invoke(getChannel, message);
-            if (includesDeviceDetails) {
-                originalIdentity += "/appId=" + module.invoke(getAppId, message)
-                        + "/version=" + module.invoke(getVersionName, message);
-            }
+            String originalIdentity = describe(message);
 
             Object builder = module.invoke(toBuilder, message);
-            module.invoke(setMobiApp, builder, MOBI_APP);
             module.invoke(setBuild, builder, BUILD);
-            module.invoke(setChannel, builder, CHANNEL);
-            if (includesDeviceDetails) {
-                module.invoke(setAppId, builder, APP_ID);
+            if (includesVersionName) {
                 module.invoke(setVersionName, builder, VERSION_NAME);
             }
             Object rewritten = module.invoke(build, builder);
@@ -116,45 +94,44 @@ final class SubtitleRequestIdentity {
                 throw new IllegalStateException("toByteArray returned " + summarize(bytes));
             }
             return new RewriteResult(
-                    (byte[]) bytes, originalIdentity, identity(includesDeviceDetails));
+                    (byte[]) bytes, originalIdentity, describe(rewritten));
+        }
+
+        /** Reads the identity actually carried by a message, so logs cannot drift. */
+        private String describe(Object message) throws Throwable {
+            String value = module.invoke(getMobiApp, message)
+                    + "/" + module.invoke(getBuild, message)
+                    + "/" + module.invoke(getChannel, message);
+            if (includesVersionName) {
+                value += "/appId=" + module.invoke(getAppId, message)
+                        + "/version=" + module.invoke(getVersionName, message);
+            }
+            return value;
         }
     }
 
-    private static final class ProtoFawkesRewriter {
+    private static final class ProtoFawkesInspector {
         private final HookApi module;
         private final Method parseFrom;
         private final Method getAppkey;
-        private final Method toBuilder;
-        private final Method setAppkey;
-        private final Method build;
-        private final Method toByteArray;
 
-        private ProtoFawkesRewriter(
+        private ProtoFawkesInspector(
                 HookApi module, ClassLoader classLoader, String messageClassName)
                 throws Throwable {
             this.module = module;
             Class<?> messageClass = module.load(classLoader, messageClassName);
-            Class<?> builderClass = module.load(classLoader, messageClassName + "$b");
             parseFrom = module.publicMethod(messageClass, "parseFrom", byte[].class);
             getAppkey = module.publicMethod(messageClass, "getAppkey");
-            toBuilder = module.publicMethod(messageClass, "toBuilder");
-            setAppkey = module.publicMethod(builderClass, "setAppkey", String.class);
-            build = module.publicMethod(builderClass, "build");
-            toByteArray = module.publicMethod(messageClass, "toByteArray");
         }
 
-        private RewriteResult rewrite(byte[] source) throws Throwable {
-            Object message = module.invoke(parseFrom, null, (Object) source);
-            String originalAppkey = String.valueOf(module.invoke(getAppkey, message));
-            Object builder = module.invoke(toBuilder, message);
-            module.invoke(setAppkey, builder, MOBI_APP);
-            Object rewritten = module.invoke(build, builder);
-            Object bytes = module.invoke(toByteArray, rewritten);
-            if (!(bytes instanceof byte[])) {
-                throw new IllegalStateException("toByteArray returned " + summarize(bytes));
+        private RewriteResult inspect(byte[] source) throws Throwable {
+            if (!module.isVerboseLoggingEnabled()) {
+                return new RewriteResult(
+                        source, "appkey=<host-preserved>", "appkey=<host-preserved>");
             }
-            return new RewriteResult(
-                    (byte[]) bytes, "appkey=" + originalAppkey, "appkey=" + MOBI_APP);
+            Object message = module.invoke(parseFrom, null, (Object) source);
+            String identity = "appkey=" + module.invoke(getAppkey, message);
+            return new RewriteResult(source, identity, identity);
         }
     }
 

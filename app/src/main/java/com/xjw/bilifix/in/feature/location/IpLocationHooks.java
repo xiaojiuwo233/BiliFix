@@ -2,6 +2,7 @@ package com.xjw.bilifix.in.feature.location;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.SystemClock;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
@@ -10,6 +11,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -20,9 +22,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Supplies a compatible request identity needed by the host's existing IP location UI. */
 public final class IpLocationHooks {
-    private static final String FAWKES_POLICY = "preserve-host-appkey";
+    private static final String APPKEY_POLICY = "preserve-host-appkey";
     private static final String PROFILE_MOBI_APP = "android";
     private static final int PROFILE_BUILD = 8880300;
+    private static final int PROFILE_APP_ID = 1;
     private static final String PROFILE_VERSION_NAME = "8.88.0";
     private static final String PROFILE_CHANNEL = "master";
     private static final String PROFILE_STATISTICS =
@@ -69,6 +72,9 @@ public final class IpLocationHooks {
     private final AtomicInteger profileLogCount = new AtomicInteger();
     private final AtomicInteger mainListLogCount = new AtomicInteger();
     private final AtomicBoolean diagnosticsInstalled = new AtomicBoolean(false);
+    private final Map<ScopeKind, Boolean> probeSignedIn = new EnumMap<>(ScopeKind.class);
+    private final Map<ScopeKind, Long> probeLastSignedInUptime = new EnumMap<>(ScopeKind.class);
+    private final long installedUptimeMs = SystemClock.elapsedRealtime();
 
     public IpLocationHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
@@ -78,6 +84,8 @@ public final class IpLocationHooks {
     public void install() {
         installGroup("profile and REST comment request identity", this::installRestIdentityHooks);
         installGroup("Moss comment request identity", this::installMossIdentityHooks);
+        installGroup("profile account state probe", this::installProfileHeaderTagDiagnostics);
+        installGroup("comment account state probe", this::installMainListDiagnostics);
     }
 
     public void installDiagnostics() {
@@ -88,18 +96,14 @@ public final class IpLocationHooks {
             module.info("IP location diagnostics skipped: verboseLogging=false");
             return;
         }
-        installGroup("MainList pagination diagnostics", this::installMainListDiagnostics);
         installGroup("comment response diagnostics", this::installCommentDiagnostics);
         installGroup("profile bottom-tag diagnostics", this::installProfileBottomTagDiagnostics);
-        installGroup("profile header-tag diagnostics", this::installProfileHeaderTagDiagnostics);
     }
 
     private void installRestIdentityHooks() throws Throwable {
         Class<?> requestClass = module.load(classLoader, "okhttp3.a0");
         Class<?> interceptorClass = module.load(classLoader,
                 "com.bilibili.okretro.interceptor.a");
-        Class<?> libBiliClass = module.load(classLoader,
-                "com.bilibili.nativelibrary.LibBili");
         Class<?> configClass = module.load(classLoader, "dc.a");
 
         Method requestUrl = module.declaredMethod(requestClass, "l");
@@ -107,7 +111,6 @@ public final class IpLocationHooks {
         Method intercept = module.declaredMethod(interceptorClass, "intercept", requestClass);
         Method addCommonParam = module.declaredMethod(
                 interceptorClass, "addCommonParam", Map.class);
-        Method domesticAppKey = module.declaredMethod(libBiliClass, "f", String.class);
         Method userAgent = module.declaredMethod(configClass, "c");
 
         module.deoptimizeFeatureMethod(intercept);
@@ -145,21 +148,19 @@ public final class IpLocationHooks {
             }
             @SuppressWarnings("unchecked")
             Map<Object, Object> parameters = (Map<Object, Object>) value;
-            String mobiApp = scope.kind == ScopeKind.PROFILE_REST
-                    ? PROFILE_MOBI_APP : COMMENT_MOBI_APP;
+            boolean profile = scope.kind == ScopeKind.PROFILE_REST;
+            String mobiApp = profile ? PROFILE_MOBI_APP : COMMENT_MOBI_APP;
             parameters.put("mobi_app", mobiApp);
-            parameters.put("appkey", module.invoke(domesticAppKey, null, mobiApp));
-            if (scope.kind == ScopeKind.PROFILE_REST) {
-                parameters.put("build", String.valueOf(PROFILE_BUILD));
-                parameters.put("channel", PROFILE_CHANNEL);
+            parameters.put("build",
+                    String.valueOf(profile ? PROFILE_BUILD : COMMENT_BUILD));
+            parameters.put("channel", profile ? PROFILE_CHANNEL : COMMENT_CHANNEL);
+            if (profile) {
                 parameters.put("statistics", PROFILE_STATISTICS);
-            } else {
-                parameters.put("build", String.valueOf(COMMENT_BUILD));
-                parameters.put("channel", COMMENT_CHANNEL);
             }
             module.debug("IP location REST parameters rewritten: source="
                     + scope.source + " mobi_app=" + mobiApp
-                    + " build=" + parameters.get("build"));
+                    + " build=" + parameters.get("build")
+                    + " appkey=" + APPKEY_POLICY);
             return result;
         });
 
@@ -594,10 +595,16 @@ public final class IpLocationHooks {
                 boolean firstPage = Boolean.TRUE.equals(hookChain.getArg(3));
                 boolean sparseFirstPage = firstPage && replies == 3 && topReplies == 0
                         && !hasPagination && nextOffset.isEmpty() && endText.isEmpty();
+                LocationSummary locationSummary = inspectMainListLocations(
+                        module.invoke(getRepliesList, reply), getReplyControl, getLocation);
+                if (locationSummary.present + locationSummary.missing > 0) {
+                    reportAccountState(ScopeKind.COMMENT_RPC, locationSummary.present > 0,
+                            "locationsPresent=" + locationSummary.present
+                                    + " locationsMissing=" + locationSummary.missing);
+                }
                 int sequence = mainListLogCount.incrementAndGet();
-                if (sparseFirstPage || shouldSample(sequence, 10, 50)) {
-                    LocationSummary locationSummary = inspectMainListLocations(
-                            module.invoke(getRepliesList, reply), getReplyControl, getLocation);
+                if (sparseFirstPage
+                        || (module.isVerboseLoggingEnabled() && shouldSample(sequence, 10, 50))) {
                     String message = "IP location MainList response: firstPage=" + firstPage
                             + " replies=" + replies
                             + " topReplies=" + topReplies
@@ -617,6 +624,38 @@ public final class IpLocationHooks {
             }
             return hookChain.proceed();
         });
+    }
+    private void reportAccountState(ScopeKind kind, boolean signedIn, String detail) {
+        long uptime = SystemClock.elapsedRealtime() - installedUptimeMs;
+        Boolean previous;
+        Long lastSignedIn;
+        synchronized (probeSignedIn) {
+            previous = probeSignedIn.put(kind, signedIn);
+            lastSignedIn = probeLastSignedInUptime.get(kind);
+            if (signedIn) {
+                probeLastSignedInUptime.put(kind, uptime);
+            }
+        }
+        if (previous != null && previous == signedIn) {
+            return;
+        }
+        String message = "IP location account state "
+                + (previous == null ? "observed" : signedIn ? "recovered" : "DEGRADED")
+                + ": probe=" + kind.logName
+                + " signedIn=" + signedIn
+                + " " + detail
+                + " identity=" + (kind == ScopeKind.PROFILE_REST
+                        ? profileIdentity() : commentIdentity(true))
+                + " appkey=" + APPKEY_POLICY
+                + " uptimeMs=" + uptime
+                + " sinceLastSignedInMs="
+                + (lastSignedIn == null ? -1 : uptime - lastSignedIn)
+                + " transportRepairs=" + transportRepairLogCount.get();
+        if (signedIn) {
+            module.info(message);
+        } else {
+            module.warn(message);
+        }
     }
 
     private LocationSummary inspectMainListLocations(
@@ -722,16 +761,34 @@ public final class IpLocationHooks {
     }
 
     private void logProfileTags(String source, Object value, Field type, Field title) {
+        if (!(value instanceof List)) {
+            if (shouldSample(profileLogCount.incrementAndGet(), 20, 100)) {
+                module.debug("IP location profile tags absent: source=" + source
+                        + " value=" + summarize(value));
+            }
+            return;
+        }
+        List<?> tags = (List<?>) value;
+        boolean hasLocation = false;
+        for (Object tag : tags) {
+            try {
+                hasLocation = tag != null && "location".equals(type.get(tag));
+            } catch (Throwable throwable) {
+                module.error("IP location profile tag inspection failed: source=" + source,
+                        throwable);
+                return;
+            }
+            if (hasLocation) {
+                break;
+            }
+        }
+        reportAccountState(ScopeKind.PROFILE_REST, hasLocation,
+                "locationTag=" + hasLocation + " tags=" + tags.size());
+
         int sequence = profileLogCount.incrementAndGet();
         if (!shouldSample(sequence, 20, 100)) {
             return;
         }
-        if (!(value instanceof List)) {
-            module.debug("IP location profile tags absent: source=" + source
-                    + " value=" + summarize(value));
-            return;
-        }
-        List<?> tags = (List<?>) value;
         for (Object tag : tags) {
             try {
                 if (tag != null && "location".equals(type.get(tag))) {
@@ -791,20 +848,17 @@ public final class IpLocationHooks {
     }
 
     private static String rewriteRestUserAgent(String original, ScopeKind kind) {
-        if (kind == ScopeKind.PROFILE_REST) {
-            return original
-                    .replace("BiliDroid/3.20.4", "BiliDroid/" + PROFILE_VERSION_NAME)
-                    .replace("mobi_app/android_i", "mobi_app/" + PROFILE_MOBI_APP)
-                    .replace("build/8230800", "build/" + PROFILE_BUILD)
-                    .replace("innerVer/8230800", "innerVer/" + PROFILE_BUILD)
-                    .replace("channel/biliintl", "channel/" + PROFILE_CHANNEL);
-        }
+        boolean profile = kind == ScopeKind.PROFILE_REST;
         return original
-                .replace("BiliDroid/3.20.4", "BiliDroid/" + COMMENT_VERSION_NAME)
-                .replace("mobi_app/android_i", "mobi_app/" + COMMENT_MOBI_APP)
-                .replace("build/8230800", "build/" + COMMENT_BUILD)
-                .replace("innerVer/8230800", "innerVer/" + COMMENT_BUILD)
-                .replace("channel/biliintl", "channel/" + COMMENT_CHANNEL);
+                .replace("BiliDroid/3.20.4", "BiliDroid/"
+                        + (profile ? PROFILE_VERSION_NAME : COMMENT_VERSION_NAME))
+                .replace("mobi_app/android_i", "mobi_app/"
+                        + (profile ? PROFILE_MOBI_APP : COMMENT_MOBI_APP))
+                .replace("build/8230800", "build/" + (profile ? PROFILE_BUILD : COMMENT_BUILD))
+                .replace("innerVer/8230800",
+                        "innerVer/" + (profile ? PROFILE_BUILD : COMMENT_BUILD))
+                .replace("channel/biliintl", "channel/"
+                        + (profile ? PROFILE_CHANNEL : COMMENT_CHANNEL));
     }
 
     private Object withScope(
@@ -826,12 +880,10 @@ public final class IpLocationHooks {
         int sequence = requestLogCount.incrementAndGet();
         if (shouldSample(sequence, 30, 100)) {
             String identity = kind == ScopeKind.PROFILE_REST
-                    ? profileIdentity()
-                    : commentIdentity(false);
+                    ? profileIdentity() : commentIdentity(false);
             module.info("IP location compatible identity enabled: source=" + source
                     + " identity=" + identity
-                    + (kind == ScopeKind.COMMENT_RPC
-                    ? " fawkes=" + FAWKES_POLICY : "")
+                    + " appkey=" + APPKEY_POLICY
                     + " sample=" + sequence);
         }
     }
@@ -881,6 +933,11 @@ public final class IpLocationHooks {
         return sequence <= initialCount || sequence % interval == 0;
     }
 
+    private static String profileIdentity() {
+        return PROFILE_MOBI_APP + "/" + PROFILE_BUILD + "/" + PROFILE_CHANNEL
+                + "/appId=" + PROFILE_APP_ID + "/version=" + PROFILE_VERSION_NAME;
+    }
+
     private static String commentIdentity(boolean includeDeviceDetails) {
         String identity = COMMENT_MOBI_APP + "/" + COMMENT_BUILD + "/" + COMMENT_CHANNEL;
         if (includeDeviceDetails) {
@@ -889,10 +946,6 @@ public final class IpLocationHooks {
         return identity;
     }
 
-    private static String profileIdentity() {
-        return PROFILE_MOBI_APP + "/" + PROFILE_BUILD + "/" + PROFILE_CHANNEL
-                + "/appId=1/version=" + PROFILE_VERSION_NAME;
-    }
 
     private enum ScopeKind {
         PROFILE_REST("profile-rest"),
