@@ -41,6 +41,8 @@ public final class SettingsManager {
             "bilifix_ai_subtitle_enabled";
     static final String KEY_AI_COMMENT_TRANSLATION_ENABLED =
             "bilifix_ai_comment_translation_enabled";
+    static final String KEY_PAID_EMOTICON_FIX_ENABLED =
+            "bilifix_paid_emoticon_fix_enabled";
     static final String KEY_SYSTEM_SHARE_ENABLED =
             "bilifix_system_share_enabled";
     static final String KEY_VERBOSE_LOGGING_ENABLED =
@@ -228,6 +230,10 @@ public final class SettingsManager {
         return state.aiCommentTranslation;
     }
 
+    public boolean isPaidEmoticonFixEnabled() {
+        return state.paidEmoticonFix;
+    }
+
     public boolean isSystemShareEnabled() {
         return state.systemShare;
     }
@@ -247,6 +253,7 @@ public final class SettingsManager {
         final boolean spaceDomesticModules;
         final boolean aiSubtitle;
         final boolean aiCommentTranslation;
+        final boolean paidEmoticonFix;
         final boolean systemShare;
         final boolean verboseLogging;
 
@@ -260,6 +267,7 @@ public final class SettingsManager {
                 boolean spaceDomesticModules,
                 boolean aiSubtitle,
                 boolean aiCommentTranslation,
+                boolean paidEmoticonFix,
                 boolean systemShare,
                 boolean verboseLogging) {
             this.articleFix = articleFix;
@@ -271,6 +279,7 @@ public final class SettingsManager {
             this.spaceDomesticModules = spaceDomesticModules;
             this.aiSubtitle = aiSubtitle;
             this.aiCommentTranslation = aiCommentTranslation;
+            this.paidEmoticonFix = paidEmoticonFix;
             this.systemShare = systemShare;
             this.verboseLogging = verboseLogging;
         }
@@ -280,6 +289,7 @@ public final class SettingsManager {
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
+                    DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED);
         }
 
@@ -303,6 +313,8 @@ public final class SettingsManager {
                             KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_AI_COMMENT_TRANSLATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_PAID_EMOTICON_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
@@ -331,6 +343,8 @@ public final class SettingsManager {
                     intent.getBooleanExtra(
                             KEY_AI_COMMENT_TRANSLATION_ENABLED, fallback.aiCommentTranslation),
                     intent.getBooleanExtra(
+                            KEY_PAID_EMOTICON_FIX_ENABLED, fallback.paidEmoticonFix),
+                    intent.getBooleanExtra(
                             KEY_SYSTEM_SHARE_ENABLED, fallback.systemShare),
                     intent.getBooleanExtra(
                             KEY_VERBOSE_LOGGING_ENABLED, fallback.verboseLogging));
@@ -348,6 +362,7 @@ public final class SettingsManager {
                     .putExtra(KEY_SPACE_DOMESTIC_MODULES_ENABLED, spaceDomesticModules)
                     .putExtra(KEY_AI_SUBTITLE_ENABLED, aiSubtitle)
                     .putExtra(KEY_AI_COMMENT_TRANSLATION_ENABLED, aiCommentTranslation)
+                    .putExtra(KEY_PAID_EMOTICON_FIX_ENABLED, paidEmoticonFix)
                     .putExtra(KEY_SYSTEM_SHARE_ENABLED, systemShare)
                     .putExtra(KEY_VERBOSE_LOGGING_ENABLED, verboseLogging);
         }
@@ -362,6 +377,7 @@ public final class SettingsManager {
                     && spaceDomesticModules == other.spaceDomesticModules
                     && aiSubtitle == other.aiSubtitle
                     && aiCommentTranslation == other.aiCommentTranslation
+                    && paidEmoticonFix == other.paidEmoticonFix
                     && systemShare == other.systemShare
                     && verboseLogging == other.verboseLogging;
         }
@@ -378,6 +394,7 @@ public final class SettingsManager {
                     + " spaceDomesticModules=" + spaceDomesticModules
                     + " aiSubtitle=" + aiSubtitle
                     + " aiCommentTranslation=" + aiCommentTranslation
+                    + " paidEmoticonFix=" + paidEmoticonFix
                     + " systemShare=" + systemShare
                     + " verboseLogging=" + verboseLogging;
         }

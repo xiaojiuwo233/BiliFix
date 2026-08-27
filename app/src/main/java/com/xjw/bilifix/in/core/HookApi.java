@@ -36,6 +36,8 @@ public interface HookApi {
 
     boolean isAiCommentTranslationEnabled();
 
+    boolean isPaidEmoticonFixEnabled();
+
     boolean isSystemShareEnabled();
 
     boolean isVerboseLoggingEnabled();

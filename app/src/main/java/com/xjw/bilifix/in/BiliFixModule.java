@@ -24,6 +24,7 @@ import com.xjw.bilifix.in.feature.article.ArticleHooks;
 import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
 import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
 import com.xjw.bilifix.in.feature.compat.CompatFeatureHooks;
+import com.xjw.bilifix.in.feature.emoticon.PaidEmoticonHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
 import com.xjw.bilifix.in.feature.share.SystemShareHooks;
 import com.xjw.bilifix.in.feature.settings.SettingsManager;
@@ -80,6 +81,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         installApplicationSettingsHook(classLoader);
         new WebViewThemeHooks(this, classLoader).install();
         new CompatFeatureHooks(this, classLoader).install();
+        new PaidEmoticonHooks(this, classLoader).install();
         IpLocationHooks locationHooks = new IpLocationHooks(this, classLoader);
         ipLocationHooks = locationHooks;
         if (mainProcess) {
@@ -248,6 +250,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public boolean isAiCommentTranslationEnabled() {
         return settingsManager.isAiCommentTranslationEnabled();
+    }
+
+    @Override
+    public boolean isPaidEmoticonFixEnabled() {
+        return settingsManager.isPaidEmoticonFixEnabled();
     }
 
     @Override

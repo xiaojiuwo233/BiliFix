@@ -10,6 +10,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_SUBTITL
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_DYNAMIC_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_PAID_EMOTICON_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
@@ -247,6 +248,15 @@ final class SettingsUiHooks {
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
+                        addSwitch(repairCategory, switchConstructor,
+                                KEY_PAID_EMOTICON_FIX_ENABLED,
+                                "修复付费表情",
+                                "支持显示和发送装扮付费表情包",
+                                settings.isPaidEmoticonFixEnabled(), 6,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
                         Object enhanceCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
                                 "增强", 1, setTitle, setLayoutResource, setOrder);
@@ -331,6 +341,7 @@ final class SettingsUiHooks {
                                 + " aiSubtitle=" + settings.isAiSubtitleEnabled()
                                 + " aiCommentTranslation="
                                 + settings.isAiCommentTranslationEnabled()
+                                + " paidEmoticonFix=" + settings.isPaidEmoticonFixEnabled()
                                 + " systemShare=" + settings.isSystemShareEnabled()
                                 + " verboseLogging=" + settings.isVerboseLoggingEnabled());
                         return null;
