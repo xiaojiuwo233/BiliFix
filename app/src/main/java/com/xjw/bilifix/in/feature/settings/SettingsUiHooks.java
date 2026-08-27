@@ -13,6 +13,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATIO
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SPACE_DOMESTIC_MODULES_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SYSTEM_SHARE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_VERBOSE_LOGGING_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_WALLET_FIX_ENABLED;
@@ -237,6 +238,15 @@ final class SettingsUiHooks {
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
+                        addSwitch(repairCategory, switchConstructor,
+                                KEY_SPACE_DOMESTIC_MODULES_ENABLED,
+                                "修复完整主页",
+                                "显示用户主页中充电，小店，收藏集等本地化入口",
+                                settings.isSpaceDomesticModulesEnabled(), 5,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
                         Object enhanceCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
                                 "增强", 1, setTitle, setLayoutResource, setOrder);
@@ -316,6 +326,8 @@ final class SettingsUiHooks {
                                 + " relationFix=" + settings.isRelationFixEnabled()
                                 + " walletFix=" + settings.isWalletFixEnabled()
                                 + " ipLocation=" + settings.isIpLocationEnabled()
+                                + " spaceDomesticModules="
+                                + settings.isSpaceDomesticModulesEnabled()
                                 + " aiSubtitle=" + settings.isAiSubtitleEnabled()
                                 + " aiCommentTranslation="
                                 + settings.isAiCommentTranslationEnabled()

@@ -35,6 +35,8 @@ public final class SettingsManager {
             "bilifix_wallet_fix_enabled";
     static final String KEY_IP_LOCATION_ENABLED =
             "bilifix_ip_location_enabled";
+    static final String KEY_SPACE_DOMESTIC_MODULES_ENABLED =
+            "bilifix_space_domestic_modules_enabled";
     static final String KEY_AI_SUBTITLE_ENABLED =
             "bilifix_ai_subtitle_enabled";
     static final String KEY_AI_COMMENT_TRANSLATION_ENABLED =
@@ -214,6 +216,10 @@ public final class SettingsManager {
         return state.ipLocation;
     }
 
+    public boolean isSpaceDomesticModulesEnabled() {
+        return state.spaceDomesticModules;
+    }
+
     public boolean isAiSubtitleEnabled() {
         return state.aiSubtitle;
     }
@@ -238,6 +244,7 @@ public final class SettingsManager {
         final boolean relationFix;
         final boolean walletFix;
         final boolean ipLocation;
+        final boolean spaceDomesticModules;
         final boolean aiSubtitle;
         final boolean aiCommentTranslation;
         final boolean systemShare;
@@ -250,6 +257,7 @@ public final class SettingsManager {
                 boolean relationFix,
                 boolean walletFix,
                 boolean ipLocation,
+                boolean spaceDomesticModules,
                 boolean aiSubtitle,
                 boolean aiCommentTranslation,
                 boolean systemShare,
@@ -260,6 +268,7 @@ public final class SettingsManager {
             this.relationFix = relationFix;
             this.walletFix = walletFix;
             this.ipLocation = ipLocation;
+            this.spaceDomesticModules = spaceDomesticModules;
             this.aiSubtitle = aiSubtitle;
             this.aiCommentTranslation = aiCommentTranslation;
             this.systemShare = systemShare;
@@ -271,7 +280,7 @@ public final class SettingsManager {
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
-                    DEFAULT_FEATURE_ENABLED);
+                    DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED);
         }
 
         static Snapshot fromPreferences(SharedPreferences preferences) {
@@ -288,6 +297,8 @@ public final class SettingsManager {
                             KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_SPACE_DOMESTIC_MODULES_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_AI_SUBTITLE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
@@ -314,6 +325,8 @@ public final class SettingsManager {
                     intent.getBooleanExtra(
                             KEY_IP_LOCATION_ENABLED, fallback.ipLocation),
                     intent.getBooleanExtra(
+                            KEY_SPACE_DOMESTIC_MODULES_ENABLED, fallback.spaceDomesticModules),
+                    intent.getBooleanExtra(
                             KEY_AI_SUBTITLE_ENABLED, fallback.aiSubtitle),
                     intent.getBooleanExtra(
                             KEY_AI_COMMENT_TRANSLATION_ENABLED, fallback.aiCommentTranslation),
@@ -332,6 +345,7 @@ public final class SettingsManager {
                     .putExtra(KEY_RELATION_FIX_ENABLED, relationFix)
                     .putExtra(KEY_WALLET_FIX_ENABLED, walletFix)
                     .putExtra(KEY_IP_LOCATION_ENABLED, ipLocation)
+                    .putExtra(KEY_SPACE_DOMESTIC_MODULES_ENABLED, spaceDomesticModules)
                     .putExtra(KEY_AI_SUBTITLE_ENABLED, aiSubtitle)
                     .putExtra(KEY_AI_COMMENT_TRANSLATION_ENABLED, aiCommentTranslation)
                     .putExtra(KEY_SYSTEM_SHARE_ENABLED, systemShare)
@@ -345,6 +359,7 @@ public final class SettingsManager {
                     && relationFix == other.relationFix
                     && walletFix == other.walletFix
                     && ipLocation == other.ipLocation
+                    && spaceDomesticModules == other.spaceDomesticModules
                     && aiSubtitle == other.aiSubtitle
                     && aiCommentTranslation == other.aiCommentTranslation
                     && systemShare == other.systemShare
@@ -360,6 +375,7 @@ public final class SettingsManager {
                     + " relationFix=" + relationFix
                     + " walletFix=" + walletFix
                     + " ipLocation=" + ipLocation
+                    + " spaceDomesticModules=" + spaceDomesticModules
                     + " aiSubtitle=" + aiSubtitle
                     + " aiCommentTranslation=" + aiCommentTranslation
                     + " systemShare=" + systemShare

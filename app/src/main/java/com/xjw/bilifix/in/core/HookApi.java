@@ -30,6 +30,8 @@ public interface HookApi {
 
     boolean isIpLocationEnabled();
 
+    boolean isSpaceDomesticModulesEnabled();
+
     boolean isAiSubtitleEnabled();
 
     boolean isAiCommentTranslationEnabled();

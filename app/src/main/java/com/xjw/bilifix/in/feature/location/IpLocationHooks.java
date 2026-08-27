@@ -9,10 +9,12 @@ import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +40,34 @@ public final class IpLocationHooks {
     private static final String REPLY_SERVICE =
             "bilibili.main.community.reply.v1.Reply/";
     private static final String PROFILE_PATH = "/x/v2/space";
+
+    /** BiliSpace fields that only ever carry domestic-exclusive modules. */
+    private static final String[] MODULE_FIELDS = {
+            "entries",                  // entry: the 小店 / 充电 / 大航海 row
+            "buttonEntranceList",       // space_button_list
+            "chargeResult",             // elec
+            "digitalButton",            // digital_button
+            "nftFaceButton",            // nft_face_button
+            "nftShowModule",            // nft_show_module
+            "fansAchievementEffect",    // fans_effect
+            "spaceGame",                // play_game
+            "cheeseVideo",              // cheese: 课堂
+            "mall",                     // 小店
+            "mallCustomContainerPath",  // ad_container_path
+            "guard",                    // 大航海
+            "adV2",                     // ad_source_content_v2: the 小店 entrance
+            "f35377ad",                 // ad_source_content, obfuscated; skipped if renamed
+            "contractResource",         // contract_resource
+    };
+
+    /** Same idea for the int-typed flags: a non-zero value alone is enough to draw a module. */
+    private static final String[] MODULE_INT_FIELDS = {
+            "mallType",                 // ad_shop_type: drives the 小店 row on its own
+    };
+
+    /** Params are logged on first sight, so this list can be tightened from real responses. */
+    private static final Set<String> DOMESTIC_TAB_PARAMS = immutableSet(
+            "shop", "mall", "cheese", "class", "game", "comic", "elec", "charge", "nft");
 
     private static final Set<String> COMMENT_RPC_READ_METHODS = immutableSet(
             "MainList",
@@ -71,6 +101,9 @@ public final class IpLocationHooks {
     private final AtomicInteger commentMissLogCount = new AtomicInteger();
     private final AtomicInteger profileLogCount = new AtomicInteger();
     private final AtomicInteger mainListLogCount = new AtomicInteger();
+    private final AtomicInteger profileFilterLogCount = new AtomicInteger();
+    private final Set<String> observedTabParams =
+            Collections.synchronizedSet(new HashSet<>());
     private final AtomicBoolean diagnosticsInstalled = new AtomicBoolean(false);
     private final Map<ScopeKind, Boolean> probeSignedIn = new EnumMap<>(ScopeKind.class);
     private final Map<ScopeKind, Long> probeLastSignedInUptime = new EnumMap<>(ScopeKind.class);
@@ -86,6 +119,14 @@ public final class IpLocationHooks {
         installGroup("Moss comment request identity", this::installMossIdentityHooks);
         installGroup("profile account state probe", this::installProfileHeaderTagDiagnostics);
         installGroup("comment account state probe", this::installMainListDiagnostics);
+        installGroup("profile response filter", this::installProfileResponseFilter);
+    }
+
+    private boolean isMasqueradeEnabled(ScopeKind kind) {
+        if (kind == ScopeKind.PROFILE_REST) {
+            return module.isIpLocationEnabled() || module.isSpaceDomesticModulesEnabled();
+        }
+        return module.isIpLocationEnabled();
     }
 
     public void installDiagnostics() {
@@ -125,7 +166,7 @@ public final class IpLocationHooks {
                 return hookChain.proceed();
             }
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
+            if (!isMasqueradeEnabled(kind)) {
                 return hookChain.proceed();
             }
             Uri uri = Uri.parse(url);
@@ -137,7 +178,7 @@ public final class IpLocationHooks {
         module.addHook("IP location domestic REST parameters", addCommonParam, hookChain -> {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
-            if (scope == null || !scope.kind.isRest() || !module.isIpLocationEnabled()) {
+            if (scope == null || !scope.kind.isRest() || !isMasqueradeEnabled(scope.kind)) {
                 return result;
             }
             Object value = hookChain.getArg(0);
@@ -168,7 +209,7 @@ public final class IpLocationHooks {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
             if (scope == null || !scope.kind.isRest() || !(result instanceof String)
-                    || !module.isIpLocationEnabled()) {
+                    || !isMasqueradeEnabled(scope.kind)) {
                 return result;
             }
             String original = (String) result;
@@ -540,7 +581,7 @@ public final class IpLocationHooks {
                 return hookChain.proceed();
             }
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
+            if (!isMasqueradeEnabled(ScopeKind.COMMENT_RPC)) {
                 return hookChain.proceed();
             }
             Uri uri = Uri.parse(url);
@@ -625,6 +666,126 @@ public final class IpLocationHooks {
             return hookChain.proceed();
         });
     }
+
+    private void installProfileResponseFilter() throws Throwable {
+        Class<?> spaceClass = module.load(classLoader,
+                "com.bilibili.app.authorspace.api.BiliSpace");
+        Class<?> cardClass = module.load(classLoader,
+                "com.bilibili.app.authorspace.api.BiliMemberCard");
+        Class<?> tabClass = module.load(classLoader,
+                "com.bilibili.app.authorspace.api.BiliSpace$Tab");
+        Field card = module.declaredField(spaceClass, "card");
+        Field spaceTag = module.declaredField(cardClass, "tags");
+        Field tabs = module.declaredField(spaceClass, "tab");
+        Field tabParam = module.declaredField(tabClass, "param");
+
+        Field[] moduleFields = resolveFields(spaceClass, MODULE_FIELDS);
+        Field[] moduleIntFields = resolveFields(spaceClass, MODULE_INT_FIELDS);
+
+        int installed = 0;
+        for (String ownerName : new String[] {
+                "com.bilibili.app.authorspace.ui.SpaceHeaderFragment2",
+                "com.bilibili.app.authorspace.ui.AuthorSpaceActivity"}) {
+            Class<?> owner = module.load(classLoader, ownerName);
+            for (Method candidate : owner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (parameters.length != 1 || parameters[0] != spaceClass) {
+                    continue;
+                }
+                module.deoptimizeFeatureMethod(candidate);
+                module.addHook("IP location profile response filter", candidate, hookChain -> {
+                    // Filtering happens before proceed(): the host reads these while rendering.
+                    filterProfileResponse(hookChain.getArg(0), card, spaceTag,
+                            tabs, tabParam, moduleFields, moduleIntFields);
+                    return hookChain.proceed();
+                });
+                installed++;
+            }
+        }
+        if (installed == 0) {
+            throw new IllegalStateException("no space class method accepts BiliSpace");
+        }
+        module.info("IP location profile response filter installed: methods=" + installed);
+    }
+
+    private Field[] resolveFields(Class<?> owner, String[] names) {
+        List<Field> resolved = new ArrayList<>(names.length);
+        for (String name : names) {
+            try {
+                resolved.add(module.declaredField(owner, name));
+            } catch (NoSuchFieldException missing) {
+                module.warn("IP location profile field absent, skipped: " + name);
+            }
+        }
+        return resolved.toArray(new Field[0]);
+    }
+
+    private void filterProfileResponse(
+            Object space, Field card, Field spaceTag, Field tabs, Field tabParam,
+            Field[] moduleFields, Field[] moduleIntFields) {
+        if (space == null) {
+            return;
+        }
+        try {
+            boolean keepLocation = module.isIpLocationEnabled();
+            if (!keepLocation) {
+                Object cardValue = card.get(space);
+                if (cardValue != null && spaceTag.get(cardValue) != null) {
+                    spaceTag.set(cardValue, null);
+                }
+            }
+            if (module.isSpaceDomesticModulesEnabled()) {
+                return;
+            }
+            int cleared = 0;
+            for (Field field : moduleFields) {
+                if (field.get(space) != null) {
+                    field.set(space, null);
+                    cleared++;
+                }
+            }
+            for (Field field : moduleIntFields) {
+                if (field.getInt(space) != 0) {
+                    field.setInt(space, 0);
+                    cleared++;
+                }
+            }
+            int droppedTabs = filterDomesticTabs(tabs.get(space), tabParam);
+            if ((cleared > 0 || droppedTabs > 0)
+                    && shouldSample(profileFilterLogCount.incrementAndGet(), 10, 200)) {
+                module.debug("IP location profile modules removed: fields=" + cleared
+                        + " tabs=" + droppedTabs + " keepLocation=" + keepLocation);
+            }
+        } catch (Throwable throwable) {
+            module.error("IP location profile response filter failed", throwable);
+        }
+    }
+
+    private int filterDomesticTabs(Object value, Field tabParam) throws Throwable {
+        if (!(value instanceof List)) {
+            return 0;
+        }
+        int dropped = 0;
+        Iterator<?> iterator = ((List<?>) value).iterator();
+        while (iterator.hasNext()) {
+            Object tab = iterator.next();
+            Object param = tab == null ? null : tabParam.get(tab);
+            String name = param == null ? "" : String.valueOf(param);
+            if (observedTabParams.add(name)) {
+                module.info("IP location profile tab observed: param=" + name);
+            }
+            if (DOMESTIC_TAB_PARAMS.contains(name)) {
+                try {
+                    iterator.remove();
+                    dropped++;
+                } catch (UnsupportedOperationException ignored) {
+                    return dropped;
+                }
+            }
+        }
+        return dropped;
+    }
+
     private void reportAccountState(ScopeKind kind, boolean signedIn, String detail) {
         long uptime = SystemClock.elapsedRealtime() - installedUptimeMs;
         Boolean previous;

@@ -236,6 +236,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
+    public boolean isSpaceDomesticModulesEnabled() {
+        return settingsManager.isSpaceDomesticModulesEnabled();
+    }
+
+    @Override
     public boolean isAiSubtitleEnabled() {
         return settingsManager.isAiSubtitleEnabled();
     }
