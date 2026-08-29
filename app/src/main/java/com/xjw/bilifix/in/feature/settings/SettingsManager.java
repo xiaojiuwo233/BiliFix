@@ -34,6 +34,8 @@ public final class SettingsManager {
             "bilifix_modern_story_home_card_enabled";
     static final String KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED =
             "bilifix_modern_story_player_button_enabled";
+    static final String KEY_VERBOSE_LOGGING_ENABLED =
+            "bilifix_verbose_logging_enabled";
     static final String KEY_MODERN_GAME_CENTER_ENTRY = "bilifix_modern_game_center_entry";
     static final String KEY_SETTINGS_ENTRY = "bilifix_settings_entry";
     static final String KEY_ABOUT = "bilifix_about";
@@ -59,6 +61,7 @@ public final class SettingsManager {
     private volatile boolean modernStoryEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernStoryHomeCardEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernStoryPlayerButtonEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean verboseLoggingEnabled = DEFAULT_FEATURE_ENABLED;
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
@@ -82,6 +85,8 @@ public final class SettingsManager {
                             modernStoryHomeCardEnabled),
                     intent.getBooleanExtra(KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
                             modernStoryPlayerButtonEnabled),
+                    intent.getBooleanExtra(KEY_VERBOSE_LOGGING_ENABLED,
+                            verboseLoggingEnabled),
                     "broadcast");
         }
     };
@@ -107,6 +112,7 @@ public final class SettingsManager {
             boolean modernStory;
             boolean modernStoryHomeCard;
             boolean modernStoryPlayerButton;
+            boolean verboseLogging;
             // Keep the write, read-back and in-memory publication atomic with ensureLoaded().
             synchronized (stateLock) {
                 preferences.edit().putBoolean(key, value).apply();
@@ -127,9 +133,12 @@ public final class SettingsManager {
                         DEFAULT_FEATURE_ENABLED);
                 modernStoryPlayerButton = preferences.getBoolean(
                         KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED, DEFAULT_FEATURE_ENABLED);
+                verboseLogging = preferences.getBoolean(
+                        KEY_VERBOSE_LOGGING_ENABLED, DEFAULT_FEATURE_ENABLED);
                 applyLocked(ipLocation, commentFreeCopy, modernLive, modernGameCenter,
                         modernMessageTopRight, modernStoryMaster, modernStory,
-                        modernStoryHomeCard, modernStoryPlayerButton, "settings-page");
+                        modernStoryHomeCard, modernStoryPlayerButton, verboseLogging,
+                        "settings-page");
             }
 
             Intent update = new Intent(SETTINGS_CHANGED_ACTION)
@@ -142,7 +151,8 @@ public final class SettingsManager {
                     .putExtra(KEY_MODERN_STORY_MASTER_ENABLED, modernStoryMaster)
                     .putExtra(KEY_MODERN_STORY_ENABLED, modernStory)
                     .putExtra(KEY_MODERN_STORY_HOME_CARD_ENABLED, modernStoryHomeCard)
-                    .putExtra(KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED, modernStoryPlayerButton);
+                    .putExtra(KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED, modernStoryPlayerButton)
+                    .putExtra(KEY_VERBOSE_LOGGING_ENABLED, verboseLogging);
             context.sendBroadcast(update);
             module.info("setting persisted: key=" + key + " value=" + value
                     + " broadcast=true");
@@ -185,6 +195,8 @@ public final class SettingsManager {
                     preferences.getBoolean(KEY_MODERN_STORY_HOME_CARD_ENABLED,
                             DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED,
+                            DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(KEY_VERBOSE_LOGGING_ENABLED,
                             DEFAULT_FEATURE_ENABLED),
                     "shared-preferences");
         }
@@ -231,11 +243,12 @@ public final class SettingsManager {
             boolean modernStory,
             boolean modernStoryHomeCard,
             boolean modernStoryPlayerButton,
+            boolean verboseLogging,
             String source) {
         synchronized (stateLock) {
             applyLocked(ipLocation, commentFreeCopy, modernLive, modernGameCenter,
                     modernMessageTopRight, modernStoryMaster, modernStory,
-                    modernStoryHomeCard, modernStoryPlayerButton, source);
+                    modernStoryHomeCard, modernStoryPlayerButton, verboseLogging, source);
         }
     }
 
@@ -249,6 +262,7 @@ public final class SettingsManager {
             boolean modernStory,
             boolean modernStoryHomeCard,
             boolean modernStoryPlayerButton,
+            boolean verboseLogging,
             String source) {
         boolean changed = !loaded
                 || this.ipLocationEnabled != ipLocation
@@ -259,7 +273,8 @@ public final class SettingsManager {
                 || this.modernStoryMasterEnabled != modernStoryMaster
                 || this.modernStoryEnabled != modernStory
                 || this.modernStoryHomeCardEnabled != modernStoryHomeCard
-                || this.modernStoryPlayerButtonEnabled != modernStoryPlayerButton;
+                || this.modernStoryPlayerButtonEnabled != modernStoryPlayerButton
+                || this.verboseLoggingEnabled != verboseLogging;
         this.ipLocationEnabled = ipLocation;
         this.commentFreeCopyEnabled = commentFreeCopy;
         this.modernLiveEnabled = modernLive;
@@ -269,6 +284,7 @@ public final class SettingsManager {
         this.modernStoryEnabled = modernStory;
         this.modernStoryHomeCardEnabled = modernStoryHomeCard;
         this.modernStoryPlayerButtonEnabled = modernStoryPlayerButton;
+        this.verboseLoggingEnabled = verboseLogging;
         loaded = true;
         String message = "settings " + (changed ? "applied" : "unchanged")
                 + ": source=" + source
@@ -280,7 +296,8 @@ public final class SettingsManager {
                 + " modernStoryMaster=" + modernStoryMaster
                 + " modernStory=" + modernStory
                 + " modernStoryHomeCard=" + modernStoryHomeCard
-                + " modernStoryPlayerButton=" + modernStoryPlayerButton;
+                + " modernStoryPlayerButton=" + modernStoryPlayerButton
+                + " verboseLogging=" + verboseLogging;
         if (changed) {
             module.info(message);
         } else {
@@ -346,5 +363,9 @@ public final class SettingsManager {
 
     public boolean isModernStoryPlayerButtonEnabled() {
         return modernStoryPlayerButtonEnabled;
+    }
+
+    public boolean isVerboseLoggingEnabled() {
+        return verboseLoggingEnabled;
     }
 }

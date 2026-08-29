@@ -37,6 +37,8 @@ public interface HookApi {
 
     boolean isModernStoryPlayerButtonEnabled();
 
+    boolean isVerboseLoggingEnabled();
+
     boolean deoptimizeFeatureMethod(Method method);
 
     Class<?> load(ClassLoader classLoader, String name) throws ClassNotFoundException;

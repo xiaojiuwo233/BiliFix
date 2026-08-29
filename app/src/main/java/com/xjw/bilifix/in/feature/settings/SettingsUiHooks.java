@@ -15,6 +15,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STO
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_HOME_CARD_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_MASTER_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_VERBOSE_LOGGING_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
 
 import android.app.Activity;
@@ -318,9 +319,23 @@ final class SettingsUiHooks {
                                     setOnPreferenceChangeListener, setChecked);
                         }
 
+                        Object debugCategory = createCategory(
+                                context, categoryConstructor, categoryTitleLayout,
+                                "调试", 3, setTitle, setLayoutResource, setOrder);
+                        module.invoke(addPreference, screen, debugCategory);
+                        addSwitch(debugCategory, switchConstructor,
+                                KEY_VERBOSE_LOGGING_ENABLED,
+                                "详细日志",
+                                "输出调试日志，会影响性能，反馈问题时务必开启，重启应用后生效",
+                                settings.isVerboseLoggingEnabled(), 0,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
+
                         Object aboutCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
-                                "关于", 3,
+                                "关于", 4,
                                 setTitle, setLayoutResource, setOrder);
                         module.invoke(addPreference, screen, aboutCategory);
                         Object about = entryConstructor.newInstance(context);
@@ -361,7 +376,8 @@ final class SettingsUiHooks {
                                 + " modernStoryHomeCard="
                                 + settings.isModernStoryHomeCardEnabled()
                                 + " modernStoryPlayerButton="
-                                + settings.isModernStoryPlayerButtonEnabled());
+                                + settings.isModernStoryPlayerButtonEnabled()
+                                + " verboseLogging=" + settings.isVerboseLoggingEnabled());
                         return null;
                     } catch (Throwable throwable) {
                         module.error("BiliFix settings page creation failed", throwable);

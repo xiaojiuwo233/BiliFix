@@ -35,6 +35,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private final AtomicBoolean applicationSettingsHookInstalled = new AtomicBoolean(false);
     private final AtomicBoolean postPackageInitializationScheduled =
             new AtomicBoolean(false);
+    private final AtomicBoolean runtimeStateLogged = new AtomicBoolean(false);
     private final SettingsManager settingsManager = new SettingsManager(this);
     private final List<XposedInterface.HookHandle> hookHandles = new ArrayList<>();
     private volatile Handler mainHandler;
@@ -48,7 +49,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     public void onModuleLoaded(ModuleLoadedParam param) {
         processName = param.getProcessName();
         mainHandler = new Handler(Looper.getMainLooper());
-        info("module loaded: process=" + processName
+        info("module loaded: version=" + BuildConfig.VERSION_NAME
+                + " versionCode=" + BuildConfig.VERSION_CODE
+                + " process=" + processName
                 + " framework=" + getFrameworkName()
                 + " frameworkVersion=" + getFrameworkVersion()
                 + " api=" + getApiVersion());
@@ -177,6 +180,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             registerSettingsReceiver(context);
             ensureSettingsLoaded(context);
             info("settings initialized: source=" + source);
+            logRuntimeState();
         } catch (Throwable throwable) {
             error("settings initialization failed but host startup will continue: source="
                     + source, throwable);
@@ -222,6 +226,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 registerSettingsReceiver(context);
                 ensureSettingsLoaded(context);
                 info("settings initialized from current application: source=" + source);
+                logRuntimeState();
                 return true;
             } else {
                 if (reportNotReady) {
@@ -332,6 +337,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
+    public boolean isVerboseLoggingEnabled() {
+        return settingsManager.isVerboseLoggingEnabled();
+    }
+
+    @Override
     public boolean deoptimizeFeatureMethod(Method method) {
         return deoptimize(method);
     }
@@ -431,7 +441,21 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         writeLog(Log.ERROR, message, throwable);
     }
 
+    private void logRuntimeState() {
+        HostVersion current = hostVersion;
+        if (current == null || !runtimeStateLogged.compareAndSet(false, true)) {
+            return;
+        }
+        info("module runtime state: host=" + current
+                + " moduleVersion=" + BuildConfig.VERSION_NAME
+                + " process=" + processName
+                + " verboseLogging=" + settingsManager.isVerboseLoggingEnabled());
+    }
+
     private void writeLog(int priority, String message, Throwable throwable) {
+        if (priority == Log.DEBUG && !settingsManager.isVerboseLoggingEnabled()) {
+            return;
+        }
         String processMessage = "[" + processName + "] " + message;
         if (throwable == null) {
             Log.println(priority, TAG, processMessage);
