@@ -1,15 +1,12 @@
 package com.xjw.bilifix.in.feature.settings;
 
+import static com.xjw.bilifix.in.core.ModuleConstants.PROJECT_RELEASES_URL;
 import static com.xjw.bilifix.in.core.ModuleConstants.PROJECT_URL;
 import static com.xjw.bilifix.in.core.ModuleConstants.TARGET_PACKAGE;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.ADVANCED_SETTINGS_FRAGMENT;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.ARG_BILIFIX_SETTINGS_PAGE;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ABOUT;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_COMMENT_TRANSLATION_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_SUBTITLE_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_COMMENT_FREE_COPY_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_DYNAMIC_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_GAME_CENTER_ENTRY;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_LIVE_ENABLED;
@@ -18,11 +15,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STO
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_HOME_CARD_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_MASTER_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SYSTEM_SHARE_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_WALLET_FIX_ENABLED;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -63,6 +56,8 @@ final class SettingsUiHooks {
                 "androidx.preference.PreferenceGroup");
         Class<?> entryClass = module.load(classLoader,
                 "tv.danmaku.bili.widget.preference.BLPreference");
+        Class<?> clickListenerClass = module.load(classLoader,
+                "androidx.preference.Preference$d");
 
         Method onCreatePreferences = module.declaredMethod(fragmentClass,
                 "onCreatePreferences", Bundle.class, String.class);
@@ -78,6 +73,8 @@ final class SettingsUiHooks {
                 "setTitle", CharSequence.class);
         Method setFragment = module.publicMethod(preferenceClass,
                 "setFragment", String.class);
+        Method setOnPreferenceClickListener = module.publicMethod(preferenceClass,
+                "setOnPreferenceClickListener", clickListenerClass);
         Method getExtras = module.publicMethod(preferenceClass, "getExtras");
         Method setPersistent = module.publicMethod(preferenceClass,
                 "setPersistent", boolean.class);
@@ -107,16 +104,22 @@ final class SettingsUiHooks {
                         Object entry = entryConstructor.newInstance(activity);
                         module.invoke(setKey, entry, KEY_SETTINGS_ENTRY);
                         module.invoke(setTitle, entry, "BiliFix");
-                        module.invoke(setFragment, entry, ADVANCED_SETTINGS_FRAGMENT);
-                        Bundle extras = (Bundle) module.invoke(getExtras, entry);
-                        extras.putBoolean(ARG_BILIFIX_SETTINGS_PAGE, true);
+                        if (module.hostVersion().isModern626OrNewer()) {
+                            module.invoke(setFragment, entry, ADVANCED_SETTINGS_FRAGMENT);
+                            Bundle extras = (Bundle) module.invoke(getExtras, entry);
+                            extras.putBoolean(ARG_BILIFIX_SETTINGS_PAGE, true);
+                        } else {
+                            module.invoke(setOnPreferenceClickListener, entry,
+                                    createIncompatibleClickListener(clickListenerClass, activity));
+                            module.info("unsupported host settings entry configured as refusal dialog: host="
+                                    + module.hostVersion());
+                        }
                         module.invoke(setPersistent, entry, false);
                         module.invoke(setOrder, entry, Integer.MIN_VALUE + 100);
                         boolean added = Boolean.TRUE.equals(
                                 module.invoke(addPreference, screen, entry));
                         module.info("settings entry injected: added=" + added
-                                + " articleFix=" + settings.isArticleFixEnabled()
-                                + " imagePreview=" + settings.isArticleFixEnabled());
+                                + " modern=" + module.hostVersion().isModern626OrNewer());
                     } catch (Throwable throwable) {
                         module.error("settings entry injection failed", throwable);
                     }
@@ -125,6 +128,10 @@ final class SettingsUiHooks {
     }
 
     private void installPageHook(ClassLoader classLoader) throws Throwable {
+        if (!module.hostVersion().isModern626OrNewer()) {
+            installUnsupportedPageHook(classLoader);
+            return;
+        }
         Class<?> fragmentClass = module.load(classLoader, ADVANCED_SETTINGS_FRAGMENT);
         Class<?> preferenceClass = module.load(classLoader, "androidx.preference.Preference");
         Class<?> preferenceGroupClass = module.load(classLoader,
@@ -200,7 +207,6 @@ final class SettingsUiHooks {
                                 "修复", 0, setTitle, setLayoutResource, setOrder);
                         module.invoke(addPreference, screen, repairCategory);
 
-                        int aboutCategoryOrder;
                         if (module.hostVersion().isModern626OrNewer()) {
                             addSwitch(repairCategory, switchConstructor,
                                     KEY_MODERN_LIVE_ENABLED,
@@ -310,108 +316,11 @@ final class SettingsUiHooks {
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
-                            aboutCategoryOrder = 3;
-                        } else {
-                            addSwitch(repairCategory, switchConstructor,
-                                    KEY_ARTICLE_FIX_ENABLED,
-                                    "修复新版专栏",
-                                    "支持查看新版专栏内容",
-                                    settings.isArticleFixEnabled(), 0,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(repairCategory, switchConstructor,
-                                    KEY_DYNAMIC_ARTICLE_FIX_ENABLED,
-                                    "修复动态缺失",
-                                    "修复动态无法显示新专栏投稿内容，与修复专栏配合使用最佳",
-                                    settings.isDynamicArticleFixEnabled(), 1,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(repairCategory, switchConstructor,
-                                    KEY_REGION_FIX_ENABLED,
-                                    "修复分区",
-                                    "替换国际版分区接口",
-                                    settings.isRegionFixEnabled(), 2,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(repairCategory, switchConstructor,
-                                    KEY_RELATION_FIX_ENABLED,
-                                    "修复关注与粉丝列表",
-                                    "解决提示未登录问题",
-                                    settings.isRelationFixEnabled(), 3,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(repairCategory, switchConstructor,
-                                    KEY_WALLET_FIX_ENABLED,
-                                    "修复钱包页",
-                                    "替换webview页面",
-                                    settings.isWalletFixEnabled(), 4,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            Object enhanceCategory = createCategory(
-                                    context, categoryConstructor, categoryTitleLayout,
-                                    "增强", 1, setTitle, setLayoutResource, setOrder);
-                            module.invoke(addPreference, screen, enhanceCategory);
-                            addSwitch(enhanceCategory, switchConstructor,
-                                    KEY_SYSTEM_SHARE_ENABLED,
-                                    "系统分享",
-                                    "为部分图片分享增加系统分享按钮",
-                                    settings.isSystemShareEnabled(), 0,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(enhanceCategory, switchConstructor,
-                                    KEY_IP_LOCATION_ENABLED,
-                                    "显示IP属地",
-                                    "和国内版一样在评论区和用户主页显示IP属地",
-                                    settings.isIpLocationEnabled(), 1,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(enhanceCategory, switchConstructor,
-                                    KEY_AI_SUBTITLE_ENABLED,
-                                    "字幕增强",
-                                    "获取由b站AI生成的视频字幕资源",
-                                    settings.isAiSubtitleEnabled(), 2,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(enhanceCategory, switchConstructor,
-                                    KEY_AI_COMMENT_TRANSLATION_ENABLED,
-                                    "评论AI翻译（实验性）",
-                                    "位于长按评论菜单中，移植于国内版新特性，可能会存在问题",
-                                    settings.isAiCommentTranslationEnabled(), 3,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            addSwitch(enhanceCategory, switchConstructor,
-                                    KEY_COMMENT_FREE_COPY_ENABLED,
-                                    "评论自由复制",
-                                    "来自哔哩漫游",
-                                    settings.isCommentFreeCopyEnabled(), 4,
-                                    changeListenerClass, context,
-                                    addPreference, setKey, setTitle, setSummary,
-                                    setPersistent, setOrder,
-                                    setOnPreferenceChangeListener, setChecked);
-                            aboutCategoryOrder = 2;
                         }
 
                         Object aboutCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
-                                "关于", aboutCategoryOrder,
+                                "关于", 3,
                                 setTitle, setLayoutResource, setOrder);
                         module.invoke(addPreference, screen, aboutCategory);
                         Object about = entryConstructor.newInstance(context);
@@ -440,17 +349,7 @@ final class SettingsUiHooks {
                         module.info("BiliFix settings page created: moduleVersion="
                                 + BuildConfig.VERSION_NAME
                                 + " host=" + module.hostVersion()
-                                + " articleFix=" + settings.isArticleFixEnabled()
-                                + " dynamicArticleFix="
-                                + settings.isDynamicArticleFixEnabled()
-                                + " regionFix=" + settings.isRegionFixEnabled()
-                                + " relationFix=" + settings.isRelationFixEnabled()
-                                + " walletFix=" + settings.isWalletFixEnabled()
                                 + " ipLocation=" + settings.isIpLocationEnabled()
-                                + " aiSubtitle=" + settings.isAiSubtitleEnabled()
-                                + " aiCommentTranslation="
-                                + settings.isAiCommentTranslationEnabled()
-                                + " systemShare=" + settings.isSystemShareEnabled()
                                 + " commentFreeCopy="
                                 + settings.isCommentFreeCopyEnabled()
                                 + " modernLive=" + settings.isModernLiveEnabled()
@@ -469,6 +368,87 @@ final class SettingsUiHooks {
                         return null;
                     }
                 });
+    }
+
+    private void installUnsupportedPageHook(ClassLoader classLoader) throws Throwable {
+        Class<?> fragmentClass = module.load(classLoader, ADVANCED_SETTINGS_FRAGMENT);
+        Method onCreatePreferences = module.declaredMethod(fragmentClass,
+                "onCreatePreferences", Bundle.class, String.class);
+        Method getArguments = module.publicMethod(fragmentClass, "getArguments");
+        Method requireContext = module.publicMethod(fragmentClass, "requireContext");
+        module.addHook("unsupported host BiliFix settings refusal", onCreatePreferences,
+                chain -> {
+                    Object fragment = chain.getThisObject();
+                    Bundle arguments = (Bundle) module.invoke(getArguments, fragment);
+                    if (arguments == null
+                            || !arguments.getBoolean(ARG_BILIFIX_SETTINGS_PAGE, false)) {
+                        return chain.proceed();
+                    }
+                    try {
+                        Context context = (Context) module.invoke(requireContext, fragment);
+                        showIncompatibleDialog(context);
+                    } catch (Throwable throwable) {
+                        module.error("unsupported host refusal dialog failed", throwable);
+                    }
+                    module.info("unsupported host BiliFix settings page refused: host="
+                            + module.hostVersion());
+                    return null;
+                });
+    }
+
+    private Object createIncompatibleClickListener(Class<?> listenerClass, Context context) {
+        return Proxy.newProxyInstance(
+                listenerClass.getClassLoader(),
+                new Class<?>[]{listenerClass},
+                (proxy, method, args) -> {
+                    if ("onPreferenceClick".equals(method.getName())) {
+                        showIncompatibleDialog(context);
+                        return true;
+                    }
+                    return handleObjectMethod(proxy, method.getName(), args,
+                            "BiliFixIncompatibleHostClickListener");
+                });
+    }
+
+    private void showIncompatibleDialog(Context context) {
+        if (context == null) {
+            module.warn("unsupported host refusal dialog skipped: context=null");
+            return;
+        }
+        com.xjw.bilifix.in.core.HostVersion hostVersion = module.hostVersion();
+        String version = hostVersion == null ? "未知" : hostVersion.versionName();
+        if (version == null || version.isEmpty()) {
+            version = "未知";
+        }
+        if (hostVersion != null && hostVersion.versionCode() >= 0) {
+            version += "，版本代码 " + hostVersion.versionCode();
+        }
+        String message = "此版本BiliFix专为6.x版本打造，不兼容你当前的版本（"
+                + version + "）\n\n"
+                + "你可以下载兼容3.20.4的BiliFix使用";
+        try {
+            new AlertDialog.Builder(context)
+                    .setTitle("不兼容")
+                    .setMessage(message)
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("下载", (dialog, which) -> {
+                        try {
+                            context.startActivity(new Intent(
+                                    Intent.ACTION_VIEW, Uri.parse(PROJECT_RELEASES_URL)));
+                            module.info("legacy compatibility release page opened: "
+                                    + PROJECT_RELEASES_URL);
+                        } catch (Throwable throwable) {
+                            module.error("legacy compatibility release page launch failed",
+                                    throwable);
+                            Toast.makeText(context, "无法打开下载页面", Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .show();
+            module.warn("incompatible host dialog shown: host=" + hostVersion);
+        } catch (Throwable throwable) {
+            module.error("incompatible host dialog display failed: host=" + hostVersion,
+                    throwable);
+        }
     }
 
     private static String describeHostVersion(com.xjw.bilifix.in.core.HostVersion hostVersion) {

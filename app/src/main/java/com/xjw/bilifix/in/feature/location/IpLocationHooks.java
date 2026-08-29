@@ -82,7 +82,7 @@ public final class IpLocationHooks {
     /**
      * 6.2.6 uses the new Moss/OkHttp stack.  Its metadata is a Kotlin-serialized
      * KMetadata object and the old okhttp3.a0/if1.a factories no longer exist.
-     * Keep this path separate from the legacy implementation so a missing old
+     * Keep this path separate from the pre-6.x implementation so a missing old
      * class cannot disable the verified 6.2.6 hooks.
      */
     public void installModern626() {

@@ -27,9 +27,6 @@ public final class CommentFreeCopyHooks {
             "com.bilibili.app.comment3.data.model.CommentItem$MenuItem";
     private static final String COMMENT_MENU_DIALOG =
             "com.bilibili.app.comment3.ui.widget.menu.CommentMoreMenuDialog";
-    private static final String LEGACY_MENU_HOLDER =
-            "com.bilibili.app.comment3.ui.widget.menu.CommentMoreMenuItemHolder";
-
     private final HookApi module;
     private final ClassLoader classLoader;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -43,11 +40,7 @@ public final class CommentFreeCopyHooks {
     }
 
     public void install() {
-        if (module.hostVersion().isModern626OrNewer()) {
-            installGroup("modern comment menu adapter", this::installModernAdapterHook);
-        } else {
-            installGroup("legacy comment menu callback", this::installLegacyCallbackHook);
-        }
+        installGroup("modern comment menu adapter", this::installModernAdapterHook);
     }
 
 
@@ -233,66 +226,6 @@ public final class CommentFreeCopyHooks {
         return match;
     }
 
-    /** Compatibility path for the old CommentMoreMenuItemHolder implementation. */
-    private void installLegacyCallbackHook() throws Throwable {
-        Class<?> holderClass = module.load(classLoader, LEGACY_MENU_HOLDER);
-        Class<?> functionClass = module.load(classLoader,
-                "kotlin.jvm.functions.Function1");
-        Class<?> menuItemClass = module.load(classLoader, COMMENT_MENU_ITEM);
-        Method callback = null;
-        for (Method candidate : holderClass.getDeclaredMethods()) {
-            Class<?>[] parameters = candidate.getParameterTypes();
-            if (Modifier.isStatic(candidate.getModifiers())
-                    && parameters.length == 3
-                    && parameters[0] == functionClass
-                    && parameters[1] == menuItemClass
-                    && View.class.isAssignableFrom(parameters[2])) {
-                callback = candidate;
-                break;
-            }
-        }
-        if (callback == null) {
-            throw new NoSuchMethodException(
-                    LEGACY_MENU_HOLDER + " COPY callback(Function1, MenuItem, View)");
-        }
-        callback.setAccessible(true);
-        module.deoptimizeFeatureMethod(callback);
-        module.addHook("comment free copy legacy callback", callback, chain -> {
-            Object result = chain.proceed();
-            Object menuItem = chain.getArg(1);
-            Object view = chain.getArg(2);
-            if (isCopyMenuItem(menuItem) && view instanceof View) {
-                View clicked = (View) view;
-                module.ensureFeatureSettings(clicked.getContext());
-                if (module.isCommentFreeCopyEnabled()) {
-                    clicked.post(() -> showClipboardDialog(clicked.getContext()));
-                }
-            }
-            return result;
-        });
-    }
-
-    private void showClipboardDialog(Context context) {
-        try {
-            if (context == null || !module.isCommentFreeCopyEnabled()) {
-                return;
-            }
-            ClipboardManager clipboard = (ClipboardManager) context.getSystemService(
-                    Context.CLIPBOARD_SERVICE);
-            ClipData clip = clipboard == null ? null : clipboard.getPrimaryClip();
-            CharSequence text = clip == null || clip.getItemCount() == 0
-                    ? null : clip.getItemAt(0).coerceToText(context);
-            if (text == null || text.length() == 0) {
-                module.warn("comment free copy skipped: clipboard text is empty");
-                return;
-            }
-
-            showSelectableTextDialog(context, text);
-        } catch (Throwable throwable) {
-            module.error("comment free copy clipboard fallback failed", throwable);
-        }
-    }
-
     private void showSelectableTextDialog(Context context, CharSequence text) {
         try {
             if (context == null || text == null || text.length() == 0
@@ -423,19 +356,6 @@ public final class CommentFreeCopyHooks {
             }
         }
         throw new NoSuchFieldException(owner.getName() + "." + name);
-    }
-
-    private static boolean isCopyMenuItem(Object menuItem) {
-        if (menuItem == null) {
-            return false;
-        }
-        try {
-            Field action = menuItem.getClass().getDeclaredField("a");
-            action.setAccessible(true);
-            return isCopyAction(action.get(menuItem));
-        } catch (Throwable ignored) {
-            return String.valueOf(menuItem).contains("COPY");
-        }
     }
 
     private static boolean isCopyAction(Object action) {

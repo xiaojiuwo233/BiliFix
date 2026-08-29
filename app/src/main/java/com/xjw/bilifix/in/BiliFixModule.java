@@ -22,18 +22,11 @@ import io.github.libxposed.api.XposedModule;
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostVersion;
 import com.xjw.bilifix.in.core.DexSymbolResolver;
-import com.xjw.bilifix.in.feature.article.ArticleHooks;
-import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
-import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
 import com.xjw.bilifix.in.feature.commentcopy.CommentFreeCopyHooks;
-import com.xjw.bilifix.in.feature.compat.CompatFeatureHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
 import com.xjw.bilifix.in.feature.modern.Modern626FeatureHooks;
 import com.xjw.bilifix.in.feature.modern.story.ModernStoryEntryHooks;
-import com.xjw.bilifix.in.feature.share.SystemShareHooks;
 import com.xjw.bilifix.in.feature.settings.SettingsManager;
-import com.xjw.bilifix.in.feature.subtitle.AiSubtitleHooks;
-import com.xjw.bilifix.in.feature.webview.WebViewThemeHooks;
 
 public final class BiliFixModule extends XposedModule implements HookApi {
     private static final String TAG = "BiliFix.In";
@@ -45,7 +38,6 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private final SettingsManager settingsManager = new SettingsManager(this);
     private final List<XposedInterface.HookHandle> hookHandles = new ArrayList<>();
     private volatile Handler mainHandler;
-    private volatile SystemShareHooks systemShareHooks;
     private volatile Modern626FeatureHooks modern626FeatureHooks;
     private volatile HostVersion hostVersion;
     private volatile DexSymbolResolver dexSymbolResolver;
@@ -75,7 +67,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         HostVersion detected = HostVersion.detect(classLoader);
         hostVersion = detected;
         if (!detected.isModern626OrNewer()) {
-            info("package-loaded early path skipped for legacy host: " + detected);
+            info("package-loaded early path skipped for unsupported pre-6.x host: " + detected);
             return;
         }
 
@@ -109,8 +101,13 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 + " classLoader=" + classLoader
                 + " host=" + hostVersion);
 
-        installApplicationSettingsHook(classLoader);
-        if (mainProcess) {
+        if (hostVersion.isModern626OrNewer()) {
+            installApplicationSettingsHook(classLoader);
+        } else if (mainProcess) {
+            settingsManager.installUiHooks(classLoader);
+            info("unsupported pre-6.x host: only BiliFix incompatibility settings entry installed");
+        }
+        if (mainProcess && hostVersion.isModern626OrNewer()) {
             new CommentFreeCopyHooks(this, classLoader).install();
         }
         if (hostVersion.isModern626OrNewer()) {
@@ -124,29 +121,12 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 new IpLocationHooks(this, classLoader).installModern626();
             } else {
                 new IpLocationHooks(this, classLoader).installModern626();
-                info("modern host web process: legacy web/article hooks intentionally skipped");
-            }
-        } else {
-            new WebViewThemeHooks(this, classLoader).install();
-            new CompatFeatureHooks(this, classLoader).install();
-            if (mainProcess) {
-                new DynamicArticleIdentityHooks(this, classLoader).install();
-                new CommentTranslationHooks(this, classLoader).install();
-                new AiSubtitleHooks(this, classLoader).install();
-                new IpLocationHooks(this, classLoader).install();
-                settingsManager.installUiHooks(classLoader);
-                SystemShareHooks shareHooks = new SystemShareHooks(this, classLoader);
-                systemShareHooks = shareHooks;
-                shareHooks.install();
-            } else {
-                new IpLocationHooks(this, classLoader).install();
-                new ArticleHooks(this, classLoader).install();
+                info("modern host web process: main-process-only hooks skipped");
             }
         }
 
         if (mainProcess && hostVersion.isModern626OrNewer()) {
-            info("modern host isolation active: all legacy feature hooks skipped even when "
-                    + "legacy preference values are enabled");
+            info("modern host feature set active");
         }
 
         info("hook installation finished: installed=" + hookHandles.size());
@@ -160,30 +140,20 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         }
         initializeCurrentApplication("package-ready", true);
         boolean installed = install("early settings initialization", () -> {
-            boolean modern = hostVersion().isModern626OrNewer();
-            Class<?> biliAppClass = null;
-            if (modern) {
-                biliAppClass = load(classLoader, "com.bilibili.gripper.BiliApp");
-                Method attachBaseContext = declaredMethod(
-                        biliAppClass, "attachBaseContext", Context.class);
-                addHook("BiliApp.attachBaseContext settings", attachBaseContext, chain -> {
-                    Object value = chain.getArg(0);
-                    if (value instanceof Context) {
-                        initializeSettingsSafely(
-                                (Context) value, "before application attachBaseContext");
-                    }
-                    return chain.proceed();
-                });
-            }
-
-            Class<?> applicationClass = modern
-                    ? biliAppClass
-                    : load(classLoader, "tv.danmaku.bili.l");
+            Class<?> applicationClass = load(classLoader, "com.bilibili.gripper.BiliApp");
+            Method attachBaseContext = declaredMethod(
+                    applicationClass, "attachBaseContext", Context.class);
+            addHook("BiliApp.attachBaseContext settings", attachBaseContext, chain -> {
+                Object value = chain.getArg(0);
+                if (value instanceof Context) {
+                    initializeSettingsSafely(
+                            (Context) value, "before application attachBaseContext");
+                }
+                return chain.proceed();
+            });
             // 6.2.6 inherits this callback from tv.danmaku.bili.A, while 6.3.0
             // overrides it directly in BiliApp. getMethod resolves both layouts.
-            Method onCreate = modern
-                    ? publicMethod(applicationClass, "onCreate")
-                    : declaredMethod(applicationClass, "onCreate");
+            Method onCreate = publicMethod(applicationClass, "onCreate");
             addHook("BiliApplication.onCreate settings", onCreate, chain -> {
                 Object application = chain.getThisObject();
                 if (application instanceof Context) {
@@ -194,10 +164,6 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 // Load switches first so modern entry hooks see the persisted state on their
                 // very first invocation instead of permanently caching the unmodified lists.
                 Object result = chain.proceed();
-                SystemShareHooks shareHooks = systemShareHooks;
-                if (shareHooks != null) {
-                    mainHandler.post(shareHooks::installDeferredCommentHooks);
-                }
                 return result;
             });
         });
@@ -296,10 +262,6 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             warn("settings post-package initialization timed out; "
                     + "next feature context will retry");
         }
-        SystemShareHooks shareHooks = systemShareHooks;
-        if (shareHooks != null) {
-            shareHooks.installDeferredCommentHooks();
-        }
     }
 
     @Override
@@ -325,53 +287,8 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
-    public boolean isArticleFixEnabled() {
-        return settingsManager.isArticleFixEnabled();
-    }
-
-    @Override
-    public boolean isDynamicArticleFixEnabled() {
-        return settingsManager.isDynamicArticleFixEnabled();
-    }
-
-    @Override
-    public boolean isImagePreviewEnabled() {
-        return settingsManager.isImagePreviewEnabled();
-    }
-
-    @Override
-    public boolean isRegionFixEnabled() {
-        return settingsManager.isRegionFixEnabled();
-    }
-
-    @Override
-    public boolean isRelationFixEnabled() {
-        return settingsManager.isRelationFixEnabled();
-    }
-
-    @Override
-    public boolean isWalletFixEnabled() {
-        return settingsManager.isWalletFixEnabled();
-    }
-
-    @Override
     public boolean isIpLocationEnabled() {
         return settingsManager.isIpLocationEnabled();
-    }
-
-    @Override
-    public boolean isAiSubtitleEnabled() {
-        return settingsManager.isAiSubtitleEnabled();
-    }
-
-    @Override
-    public boolean isAiCommentTranslationEnabled() {
-        return settingsManager.isAiCommentTranslationEnabled();
-    }
-
-    @Override
-    public boolean isSystemShareEnabled() {
-        return settingsManager.isSystemShareEnabled();
     }
 
     @Override

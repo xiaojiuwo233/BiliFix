@@ -19,25 +19,7 @@ public interface HookApi {
 
     void ensureFeatureSettings(Context context);
 
-    boolean isArticleFixEnabled();
-
-    boolean isDynamicArticleFixEnabled();
-
-    boolean isImagePreviewEnabled();
-
-    boolean isRegionFixEnabled();
-
-    boolean isRelationFixEnabled();
-
-    boolean isWalletFixEnabled();
-
     boolean isIpLocationEnabled();
-
-    boolean isAiSubtitleEnabled();
-
-    boolean isAiCommentTranslationEnabled();
-
-    boolean isSystemShareEnabled();
 
     boolean isCommentFreeCopyEnabled();
 

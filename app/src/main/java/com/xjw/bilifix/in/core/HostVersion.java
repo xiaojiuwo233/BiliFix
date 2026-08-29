@@ -19,7 +19,7 @@ public final class HostVersion {
             "tv.danmaku.bili.khomeapi.service.HomeTabServiceKt";
 
     public enum Generation {
-        LEGACY_WHITE,
+        UNSUPPORTED_PRE_626,
         MODERN_626_OR_NEWER
     }
 
@@ -47,21 +47,17 @@ public final class HostVersion {
                     : packageInfo.versionCode;
             Generation generation = code >= VERSION_CODE_626
                     ? Generation.MODERN_626_OR_NEWER
-                    : Generation.LEGACY_WHITE;
+                    : Generation.UNSUPPORTED_PRE_626;
             return new HostVersion(
                     generation, code, packageInfo.versionName, "package-manager");
         }
 
         boolean modern = classExists(classLoader, MODERN_SENTINEL);
         return new HostVersion(
-                modern ? Generation.MODERN_626_OR_NEWER : Generation.LEGACY_WHITE,
+                modern ? Generation.MODERN_626_OR_NEWER : Generation.UNSUPPORTED_PRE_626,
                 -1L,
-                modern ? "6.2.6+" : "legacy",
-                modern ? "modern-class-sentinel" : "legacy-class-sentinel");
-    }
-
-    public boolean isLegacy() {
-        return generation == Generation.LEGACY_WHITE;
+                modern ? "6.2.6+" : "unknown-pre-6.x",
+                modern ? "modern-class-sentinel" : "unsupported-class-sentinel");
     }
 
     public boolean isModern626OrNewer() {
