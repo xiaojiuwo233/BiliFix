@@ -227,7 +227,7 @@ public final class IpLocationHooks {
                 module, classLoader, "com.bapis.bilibili.metadata.Metadata", false);
         ProtoIdentityRewriter device = new ProtoIdentityRewriter(
                 module, classLoader, "com.bapis.bilibili.metadata.device.Device", true);
-        ProtoFawkesInspector fawkes = new ProtoFawkesInspector(
+        ProtoFawkesCommentReadRewriter fawkes = new ProtoFawkesCommentReadRewriter(
                 module, classLoader,
                 "com.bapis.bilibili.metadata.fawkes.FawkesReq");
 
@@ -278,7 +278,7 @@ public final class IpLocationHooks {
 
     private void installMossGrpcHeaderRewrites(
             ProtoIdentityRewriter metadata, ProtoIdentityRewriter device,
-            ProtoFawkesInspector fawkes) throws Throwable {
+            ProtoFawkesCommentReadRewriter fawkes) throws Throwable {
         Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
         Class<?> headerKeyClass = module.load(classLoader, "io.grpc.n0$h");
         Method headerGet = module.declaredMethod(headersClass, "g", headerKeyClass);
@@ -366,7 +366,7 @@ public final class IpLocationHooks {
 
     private void installEncodedMossHeaderHooks(
             Class<?> metadataFactoryClass, ProtoIdentityRewriter metadata,
-            ProtoIdentityRewriter device, ProtoFawkesInspector fawkes) throws Throwable {
+            ProtoIdentityRewriter device, ProtoFawkesCommentReadRewriter fawkes) throws Throwable {
         Method createEncodedMetadata = module.declaredMethod(metadataFactoryClass, "f");
         Method createEncodedDevice = module.declaredMethod(metadataFactoryClass, "c");
         Method createEncodedFawkes = module.declaredMethod(metadataFactoryClass, "b");
@@ -655,7 +655,8 @@ public final class IpLocationHooks {
                             + " locationsPresent=" + locationSummary.present
                             + " locationsMissing=" + locationSummary.missing
                             + " sampleLocation=" + locationSummary.sample
-                            + " endText=" + endText;
+                            + " endText=" + endText
+                            + " fawkesPolicy=comment-read-android_hd";
                     if (sparseFirstPage) {
                         module.warn(message + " sparse-three-reply signature=true");
                     } else {
@@ -807,7 +808,7 @@ public final class IpLocationHooks {
                 + " " + detail
                 + " identity=" + (kind == ScopeKind.PROFILE_REST
                         ? profileIdentity() : commentIdentity(true))
-                + " appkey=" + APPKEY_POLICY
+                + " appkey=" + appkeyPolicy(kind)
                 + " uptimeMs=" + uptime
                 + " sinceLastSignedInMs="
                 + (lastSignedIn == null ? -1 : uptime - lastSignedIn)
@@ -1000,7 +1001,8 @@ public final class IpLocationHooks {
         int methodEnd = methodStart;
         while (methodEnd < value.length()) {
             char current = value.charAt(methodEnd);
-            if (current == '?' || current == '#' || current == '/') {
+            if (current == '?' || current == '#' || current == '/'
+                    || current == '[' || Character.isWhitespace(current)) {
                 break;
             }
             methodEnd++;
@@ -1044,9 +1046,14 @@ public final class IpLocationHooks {
                     ? profileIdentity() : commentIdentity(false);
             module.info("IP location compatible identity enabled: source=" + source
                     + " identity=" + identity
-                    + " appkey=" + APPKEY_POLICY
+                    + " appkey=" + appkeyPolicy(kind)
                     + " sample=" + sequence);
         }
+    }
+
+    private static String appkeyPolicy(ScopeKind kind) {
+        return kind == ScopeKind.COMMENT_RPC
+                ? "comment-read=android_hd;other=host-preserved" : APPKEY_POLICY;
     }
 
     private void logFinalTransport(String transport, String source) {
@@ -1256,33 +1263,56 @@ public final class IpLocationHooks {
         }
     }
 
-    private static final class ProtoFawkesInspector implements ProtoRewriter {
+    private final class ProtoFawkesCommentReadRewriter implements ProtoRewriter {
         private final HookApi module;
         private final Method parseFrom;
         private final Method getAppkey;
+        private final Method toBuilder;
+        private final Method setAppkey;
+        private final Method build;
+        private final Method toByteArray;
 
-        private ProtoFawkesInspector(
+        private ProtoFawkesCommentReadRewriter(
                 HookApi module, ClassLoader classLoader, String messageClassName)
                 throws Throwable {
             this.module = module;
             Class<?> messageClass = module.load(classLoader, messageClassName);
+            Class<?> builderClass = module.load(classLoader, messageClassName + "$b");
             parseFrom = module.publicMethod(messageClass, "parseFrom", byte[].class);
             getAppkey = module.publicMethod(messageClass, "getAppkey");
+            toBuilder = module.publicMethod(messageClass, "toBuilder");
+            setAppkey = module.publicMethod(builderClass, "setAppkey", String.class);
+            build = module.publicMethod(builderClass, "build");
+            toByteArray = module.publicMethod(messageClass, "toByteArray");
         }
 
         @Override
         public ProtoRewriteResult rewrite(byte[] source) throws Throwable {
-            if (!module.isVerboseLoggingEnabled()) {
+            RequestScope scope = requestScope.get();
+            if (scope == null || !isCommentReadSource(scope.source)) {
                 return new ProtoRewriteResult(
                         source, "appkey=<host-preserved>",
                         "appkey=<host-preserved>", false);
             }
             Object message = module.invoke(parseFrom, null, (Object) source);
             String originalAppkey = String.valueOf(module.invoke(getAppkey, message));
-            String identity = "appkey=" + originalAppkey;
+            Object builder = module.invoke(toBuilder, message);
+            module.invoke(setAppkey, builder, COMMENT_MOBI_APP);
+            Object rewrittenMessage = module.invoke(build, builder);
+            Object rewrittenBytes = module.invoke(toByteArray, rewrittenMessage);
+            if (!(rewrittenBytes instanceof byte[])) {
+                throw new IllegalStateException("toByteArray returned "
+                        + summarize(rewrittenBytes));
+            }
             return new ProtoRewriteResult(
-                    source, identity, identity, false);
+                    (byte[]) rewrittenBytes,
+                    "appkey=" + originalAppkey,
+                    "appkey=" + COMMENT_MOBI_APP);
         }
+    }
+
+    private static boolean isCommentReadSource(String source) {
+        return isCommentReadRpc(source);
     }
 
     private static final class ProtoRewriteResult {
