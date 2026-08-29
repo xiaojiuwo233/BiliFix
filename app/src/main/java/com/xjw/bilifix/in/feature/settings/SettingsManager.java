@@ -22,6 +22,8 @@ public final class SettingsManager {
 
     static final String KEY_IP_LOCATION_ENABLED = "bilifix_ip_location_enabled";
     static final String KEY_COMMENT_FREE_COPY_ENABLED = "bilifix_comment_free_copy_enabled";
+    private static final String LEGACY_KEY_VIDEO_DESCRIPTION_FREE_COPY_ENABLED =
+            "bilifix_video_description_free_copy_enabled";
     static final String KEY_MODERN_LIVE_ENABLED = "bilifix_modern_live_enabled";
     static final String KEY_MODERN_GAME_CENTER_ENABLED =
             "bilifix_modern_game_center_enabled";
@@ -36,6 +38,7 @@ public final class SettingsManager {
             "bilifix_modern_story_player_button_enabled";
     static final String KEY_VERBOSE_LOGGING_ENABLED =
             "bilifix_verbose_logging_enabled";
+    static final String KEY_RESTART_HOST = "bilifix_restart_host";
     static final String KEY_MODERN_GAME_CENTER_ENTRY = "bilifix_modern_game_center_entry";
     static final String KEY_SETTINGS_ENTRY = "bilifix_settings_entry";
     static final String KEY_ABOUT = "bilifix_about";
@@ -118,8 +121,7 @@ public final class SettingsManager {
                 preferences.edit().putBoolean(key, value).apply();
                 ipLocation = preferences.getBoolean(KEY_IP_LOCATION_ENABLED,
                         DEFAULT_FEATURE_ENABLED);
-                commentFreeCopy = preferences.getBoolean(KEY_COMMENT_FREE_COPY_ENABLED,
-                        DEFAULT_FEATURE_ENABLED);
+                commentFreeCopy = readFreeCopyEnabled(preferences);
                 modernLive = preferences.getBoolean(KEY_MODERN_LIVE_ENABLED,
                         DEFAULT_FEATURE_ENABLED);
                 modernGameCenter = preferences.getBoolean(KEY_MODERN_GAME_CENTER_ENABLED,
@@ -183,8 +185,7 @@ public final class SettingsManager {
             SharedPreferences preferences = preferences(context);
             apply(
                     preferences.getBoolean(KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
-                    preferences.getBoolean(KEY_COMMENT_FREE_COPY_ENABLED,
-                            DEFAULT_FEATURE_ENABLED),
+                    readFreeCopyEnabled(preferences),
                     preferences.getBoolean(KEY_MODERN_LIVE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(KEY_MODERN_GAME_CENTER_ENABLED,
                             DEFAULT_FEATURE_ENABLED),
@@ -214,6 +215,22 @@ public final class SettingsManager {
                     + " implementation=" + preferences.getClass().getName());
         }
         return preferences;
+    }
+
+    private boolean readFreeCopyEnabled(SharedPreferences preferences) {
+        boolean enabled = preferences.getBoolean(
+                KEY_COMMENT_FREE_COPY_ENABLED, DEFAULT_FEATURE_ENABLED);
+        if (!preferences.contains(LEGACY_KEY_VIDEO_DESCRIPTION_FREE_COPY_ENABLED)) {
+            return enabled;
+        }
+        boolean merged = enabled || preferences.getBoolean(
+                LEGACY_KEY_VIDEO_DESCRIPTION_FREE_COPY_ENABLED, DEFAULT_FEATURE_ENABLED);
+        preferences.edit()
+                .putBoolean(KEY_COMMENT_FREE_COPY_ENABLED, merged)
+                .remove(LEGACY_KEY_VIDEO_DESCRIPTION_FREE_COPY_ENABLED)
+                .apply();
+        module.info("legacy video-description free-copy setting merged: enabled=" + merged);
+        return merged;
     }
 
     private static boolean readModernStoryMaster(SharedPreferences preferences) {

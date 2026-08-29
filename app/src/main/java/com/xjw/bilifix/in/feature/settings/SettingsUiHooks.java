@@ -16,6 +16,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STO
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_MASTER_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_VERBOSE_LOGGING_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RESTART_HOST;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
 
 import android.app.Activity;
@@ -310,8 +311,8 @@ final class SettingsUiHooks {
                                     setOnPreferenceChangeListener, setChecked);
                             addSwitch(enhanceCategory, switchConstructor,
                                     KEY_COMMENT_FREE_COPY_ENABLED,
-                                    "评论自由复制",
-                                    "来自哔哩漫游",
+                                    "自由复制",
+                                    "视频简介与评论自由复制，来自哔哩漫游",
                                     settings.isCommentFreeCopyEnabled(), 2,
                                     changeListenerClass, context,
                                     addPreference, setKey, setTitle, setSummary,
@@ -332,6 +333,16 @@ final class SettingsUiHooks {
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
+                        Object restartHost = entryConstructor.newInstance(context);
+                        module.invoke(setKey, restartHost, KEY_RESTART_HOST);
+                        module.invoke(setTitle, restartHost, "重新启动B站");
+                        module.invoke(setSummary, restartHost,
+                                "修改配置后记得点击重载B站");
+                        module.invoke(setPersistent, restartHost, false);
+                        module.invoke(setOrder, restartHost, 1);
+                        module.invoke(setOnPreferenceClickListener, restartHost,
+                                createRestartHostClickListener(clickListenerClass, context));
+                        module.invoke(addPreference, debugCategory, restartHost);
 
                         Object aboutCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
@@ -672,6 +683,44 @@ final class SettingsUiHooks {
                     return handleObjectMethod(proxy, method.getName(), args,
                             "BiliFixAboutClickListener");
                 });
+    }
+
+    private Object createRestartHostClickListener(
+            Class<?> listenerClass, Context context) {
+        return Proxy.newProxyInstance(
+                listenerClass.getClassLoader(),
+                new Class<?>[]{listenerClass},
+                (proxy, method, args) -> {
+                    if ("onPreferenceClick".equals(method.getName())) {
+                        restartHost(context);
+                        return true;
+                    }
+                    return handleObjectMethod(proxy, method.getName(), args,
+                            "BiliFixRestartHostClickListener");
+                });
+    }
+
+    private void restartHost(Context context) {
+        if (context == null) {
+            module.warn("host restart skipped: context=null");
+            return;
+        }
+        try {
+            Intent launchIntent = context.getPackageManager()
+                    .getLaunchIntentForPackage(TARGET_PACKAGE);
+            if (launchIntent == null) {
+                throw new IllegalStateException("host launch intent unavailable: "
+                        + TARGET_PACKAGE);
+            }
+            if (context instanceof Activity) {
+                ((Activity) context).finishAffinity();
+            }
+            context.startActivity(launchIntent);
+            module.info("host restart requested directly: package=" + TARGET_PACKAGE);
+            System.exit(0);
+        } catch (Throwable throwable) {
+            module.error("host restart request failed", throwable);
+        }
     }
 
     private Object createGameCenterClickListener(
