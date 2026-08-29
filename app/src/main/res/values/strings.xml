@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">BiliFix White</string>
-    <string name="module_description">针对国际白版b站(com.bilibili.app.in)的功能修复与增强 Github@xiaojiuwo233</string>
+    <string name="app_name">BiliFix</string>
+    <string name="module_description">针对国际版b站(com.bilibili.app.in)的功能修复与增强 兼容6.2.6+ Github@xiaojiuwo233</string>
 </resources>

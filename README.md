@@ -1,4 +1,4 @@
-# BiliFix White
+# BiliFix
 
 针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。下载请查看本仓库最新[CI](https://github.com/xiaojiuwo233/BiliFix/actions?query=branch%3A6.2.6)
 

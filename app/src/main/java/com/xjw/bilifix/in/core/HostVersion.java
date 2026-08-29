@@ -13,8 +13,8 @@ import java.lang.reflect.Method;
 public final class HostVersion {
     /** Verified versionCode of the new international 6.2.6 client. */
     private static final long VERSION_CODE_626 = 9_060_400L;
-    /** Verified versionCode of the international 6.3.0 client. */
-    private static final long VERSION_CODE_630 = 9_080_100L;
+    private static final long VERSION_CODE_630_ROUTING = 9_080_100L;
+    private static final long VERSION_CODE_630_SUPPORTED = 9_080_300L;
     private static final String MODERN_SENTINEL =
             "tv.danmaku.bili.khomeapi.service.HomeTabServiceKt";
 
@@ -75,11 +75,12 @@ public final class HostVersion {
 
     /** True only for the international 6.3.0 build inspected by BiliFix. */
     public boolean isExact630() {
-        return VERSION_CODE_630 == versionCode && "6.3.0".equals(versionName);
+        return VERSION_CODE_630_SUPPORTED == versionCode
+                && "6.3.0".equals(versionName);
     }
 
     public boolean isModern630OrNewer() {
-        return versionCode >= VERSION_CODE_630;
+        return versionCode >= VERSION_CODE_630_ROUTING;
     }
 
     public boolean isSupportedModernHost() {

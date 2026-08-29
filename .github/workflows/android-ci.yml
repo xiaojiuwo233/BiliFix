@@ -73,7 +73,7 @@ jobs:
           version_name="$(jq -er '.elements | select(length == 1) | .[0].versionName' "$metadata_path")"
           output_file="$(jq -er '.elements | select(length == 1) | .[0].outputFile' "$metadata_path")"
           source_path="app/build/outputs/apk/release/$output_file"
-          apk_name="BiliFix-White-${version_name}-${version_code}"
+          apk_name="BiliFix-${version_name}-${version_code}"
           target_path="app/build/outputs/apk/release/${apk_name}.apk"
           if [[ ! -f "$source_path" ]]; then
             printf 'Release APK not found: %s\n' "$source_path" >&2

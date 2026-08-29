@@ -5,7 +5,7 @@ plugins {
 }
 
 base {
-    archivesName.set("BiliFix-White")
+    archivesName.set("BiliFix")
 }
 
 val releaseSigningPropertiesFile = rootProject.file("keystore.properties")
@@ -57,7 +57,7 @@ android {
         applicationId = "com.xjw.bilifix.in"
         minSdk = 29
         targetSdk = 36
-        versionCode = 31
+        versionCode = 62631
         versionName = "0.9.33"
     }
 

@@ -12,8 +12,8 @@ cd "$PROJECT_DIR"
 ./gradlew --no-daemon :app:lintRelease :app:assembleRelease
 
 APK_DIR="$PROJECT_DIR/app/build/outputs/apk/release"
-SIGNED_APK="$APK_DIR/BiliFix-White-release.apk"
-UNSIGNED_APK="$APK_DIR/BiliFix-White-release-unsigned.apk"
+SIGNED_APK="$APK_DIR/BiliFix-release.apk"
+UNSIGNED_APK="$APK_DIR/BiliFix-release-unsigned.apk"
 
 if [[ -f "$SIGNED_APK" ]]; then
   APK_PATH="$SIGNED_APK"
