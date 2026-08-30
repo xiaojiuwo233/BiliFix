@@ -213,7 +213,7 @@ final class SettingsUiHooks {
                             addSwitch(repairCategory, switchConstructor,
                                     KEY_MODERN_LIVE_ENABLED,
                                     "恢复直播入口",
-                                    "首页tab恢复直播入口，重启后生效",
+                                    "恢复首页、关注动态与用户主页的直播入口，重启后生效",
                                     settings.isModernLiveEnabled(), 0,
                                     changeListenerClass, context,
                                     addPreference, setKey, setTitle, setSummary,

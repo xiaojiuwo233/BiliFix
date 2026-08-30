@@ -26,6 +26,7 @@ import com.xjw.bilifix.in.feature.commentcopy.CommentFreeCopyHooks;
 import com.xjw.bilifix.in.feature.commentcopy.DirectMessageFreeCopyHooks;
 import com.xjw.bilifix.in.feature.commentcopy.VideoDescriptionFreeCopyHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
+import com.xjw.bilifix.in.feature.live.LiveEntranceHooks;
 import com.xjw.bilifix.in.feature.modern.Modern626FeatureHooks;
 import com.xjw.bilifix.in.feature.modern.story.ModernStoryEntryHooks;
 import com.xjw.bilifix.in.feature.settings.SettingsManager;
@@ -125,6 +126,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 hooks.installEarly();
                 hooks.installReady();
                 new ModernStoryEntryHooks(this, classLoader).install();
+                new LiveEntranceHooks(this, classLoader).install();
                 new IpLocationHooks(this, classLoader).installModern626();
             } else {
                 new IpLocationHooks(this, classLoader).installModern626();

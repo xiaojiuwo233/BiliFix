@@ -436,7 +436,7 @@ public final class IpLocationHooks {
                 String.class, String.class, String.class);
         module.addHook("6.2.6 KMetadata identity rewrite", constructor, hookChain -> {
             RequestScope scope = requestScope.get();
-            if (scope == null || !module.isIpLocationEnabled()) {
+            if (scope == null || !isIdentityEnabled(scope.kind)) {
                 return hookChain.proceed();
             }
             Object[] args = hookChain.getArgs().toArray();
@@ -481,7 +481,7 @@ public final class IpLocationHooks {
             String verb = request == null ? "GET" : String.valueOf(verbField.get(request));
             ScopeKind kind = classifyModernRequest(rawUrl, verb);
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled() || kind == null || !kind.isRest()) {
+            if (kind == null || !kind.isRest() || !isIdentityEnabled(kind)) {
                 return hookChain.proceed();
             }
             Uri uri = Uri.parse(rawUrl);
@@ -493,7 +493,8 @@ public final class IpLocationHooks {
         module.addHook("6.2.6 domestic REST parameters", addCommonParam, hookChain -> {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
-            if (scope == null || !scope.kind.isRest() || !module.isIpLocationEnabled()) {
+            if (scope == null || !scope.kind.isRest()
+                    || !isIdentityEnabled(scope.kind)) {
                 return result;
             }
             Object value = hookChain.getArg(0);
@@ -581,6 +582,13 @@ public final class IpLocationHooks {
             module.debug("6.2.6 request classification skipped: " + throwable);
         }
         return null;
+    }
+
+    private boolean isIdentityEnabled(ScopeKind kind) {
+        if (kind == ScopeKind.PROFILE_REST) {
+            return module.isIpLocationEnabled() || module.isModernLiveEnabled();
+        }
+        return module.isIpLocationEnabled();
     }
 
     private void installRestIdentityHooks() throws Throwable {
