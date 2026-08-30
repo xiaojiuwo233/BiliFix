@@ -14,6 +14,8 @@ import io.github.libxposed.api.XposedInterface;
  * reflection, logging and setting dependencies remain explicit.</p>
  */
 public interface HookApi {
+    HostVersion hostVersion();
+
     void ensureFeatureSettings(Context context);
 
     boolean isArticleFixEnabled();

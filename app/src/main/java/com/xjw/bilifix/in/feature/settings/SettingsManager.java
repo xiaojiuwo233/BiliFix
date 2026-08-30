@@ -78,7 +78,9 @@ public final class SettingsManager {
     }
 
     public void installUiHooks(ClassLoader classLoader) {
-        new SettingsDeepLinkHooks(module).install(classLoader);
+        if (!module.hostVersion().isIncompatible()) {
+            new SettingsDeepLinkHooks(module).install(classLoader);
+        }
         new SettingsUiHooks(module, this).install(classLoader);
     }
 

@@ -20,6 +20,7 @@ import io.github.libxposed.api.XposedModule;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
+import com.xjw.bilifix.in.core.HostVersion;
 import com.xjw.bilifix.in.feature.article.ArticleHooks;
 import com.xjw.bilifix.in.feature.article.DynamicArticleIdentityHooks;
 import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
@@ -42,6 +43,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private volatile Handler mainHandler;
     private volatile SystemShareHooks systemShareHooks;
     private volatile IpLocationHooks ipLocationHooks;
+    private volatile HostVersion hostVersion;
 
     private volatile String processName = "unknown";
 
@@ -74,9 +76,21 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         }
 
         ClassLoader classLoader = param.getClassLoader();
+        hostVersion = HostVersion.detect(classLoader);
         info("target package ready: process=" + processName
                 + " role=" + (mainProcess ? "main" : "column-web")
-                + " classLoader=" + classLoader);
+                + " classLoader=" + classLoader
+                + " host=" + hostVersion);
+
+        if (hostVersion.isIncompatible()) {
+            if (mainProcess) {
+                settingsManager.installUiHooks(classLoader);
+                info("incompatible host: only BiliFix compatibility entry installed");
+            } else {
+                info("incompatible host web process skipped: " + hostVersion);
+            }
+            return;
+        }
 
         installApplicationSettingsHook(classLoader);
         new WebViewThemeHooks(this, classLoader).install();
@@ -187,6 +201,15 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         info("module runtime state: version=" + BuildConfig.VERSION_NAME
                 + " process=" + processName
                 + " verboseLogging=" + settingsManager.isVerboseLoggingEnabled());
+    }
+
+    @Override
+    public HostVersion hostVersion() {
+        HostVersion value = hostVersion;
+        if (value == null) {
+            throw new IllegalStateException("host version requested before package ready");
+        }
+        return value;
     }
 
     @Override

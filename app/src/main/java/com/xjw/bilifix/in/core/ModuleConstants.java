@@ -7,6 +7,7 @@ public final class ModuleConstants {
     public static final String WEB_PROCESS = TARGET_PACKAGE + ":web";
     public static final String PROJECT_URL = "https://github.com/xiaojiuwo233/bilifix";
     public static final String PROJECT_NEW_ISSUE_URL = PROJECT_URL + "/issues/new";
+    public static final String PROJECT_MODERN_NOTICE_URL = PROJECT_URL + "/issues/6";
 
     private ModuleConstants() {
     }

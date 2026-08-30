@@ -1,6 +1,7 @@
 package com.xjw.bilifix.in.feature.settings;
 
 import static com.xjw.bilifix.in.core.ModuleConstants.PROJECT_URL;
+import static com.xjw.bilifix.in.core.ModuleConstants.PROJECT_MODERN_NOTICE_URL;
 import static com.xjw.bilifix.in.core.ModuleConstants.TARGET_PACKAGE;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.ADVANCED_SETTINGS_FRAGMENT;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.ARG_BILIFIX_SETTINGS_PAGE;
@@ -20,6 +21,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_VERBOSE_LO
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_WALLET_FIX_ENABLED;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
@@ -57,6 +59,8 @@ final class SettingsUiHooks {
                 "androidx.preference.PreferenceGroup");
         Class<?> entryClass = module.load(classLoader,
                 "tv.danmaku.bili.widget.preference.BLPreference");
+        Class<?> clickListenerClass = module.load(classLoader,
+                "androidx.preference.Preference$d");
 
         Method onCreatePreferences = module.declaredMethod(fragmentClass,
                 "onCreatePreferences", Bundle.class, String.class);
@@ -72,6 +76,8 @@ final class SettingsUiHooks {
                 "setTitle", CharSequence.class);
         Method setFragment = module.publicMethod(preferenceClass,
                 "setFragment", String.class);
+        Method setOnPreferenceClickListener = module.publicMethod(preferenceClass,
+                "setOnPreferenceClickListener", clickListenerClass);
         Method getExtras = module.publicMethod(preferenceClass, "getExtras");
         Method setPersistent = module.publicMethod(preferenceClass,
                 "setPersistent", boolean.class);
@@ -101,16 +107,24 @@ final class SettingsUiHooks {
                         Object entry = entryConstructor.newInstance(activity);
                         module.invoke(setKey, entry, KEY_SETTINGS_ENTRY);
                         module.invoke(setTitle, entry, "BiliFix");
-                        module.invoke(setFragment, entry, ADVANCED_SETTINGS_FRAGMENT);
-                        Bundle extras = (Bundle) module.invoke(getExtras, entry);
-                        extras.putBoolean(ARG_BILIFIX_SETTINGS_PAGE, true);
+                        if (module.hostVersion().isIncompatible()) {
+                            module.invoke(setOnPreferenceClickListener, entry,
+                                    createIncompatibleClickListener(
+                                            clickListenerClass, activity));
+                            module.info("incompatible host settings entry configured as refusal dialog: host="
+                                    + module.hostVersion());
+                        } else {
+                            module.invoke(setFragment, entry, ADVANCED_SETTINGS_FRAGMENT);
+                            Bundle extras = (Bundle) module.invoke(getExtras, entry);
+                            extras.putBoolean(ARG_BILIFIX_SETTINGS_PAGE, true);
+                        }
                         module.invoke(setPersistent, entry, false);
                         module.invoke(setOrder, entry, Integer.MIN_VALUE + 100);
                         boolean added = Boolean.TRUE.equals(
                                 module.invoke(addPreference, screen, entry));
                         module.info("settings entry injected: added=" + added
-                                + " articleFix=" + settings.isArticleFixEnabled()
-                                + " imagePreview=" + settings.isArticleFixEnabled());
+                                + " compatible=" + !module.hostVersion().isIncompatible()
+                                + " host=" + module.hostVersion());
                     } catch (Throwable throwable) {
                         module.error("settings entry injection failed", throwable);
                     }
@@ -456,6 +470,57 @@ final class SettingsUiHooks {
                     return handleObjectMethod(proxy, method.getName(), args,
                             "BiliFixAboutClickListener");
                 });
+    }
+
+    private Object createIncompatibleClickListener(Class<?> listenerClass, Context context) {
+        return Proxy.newProxyInstance(
+                listenerClass.getClassLoader(),
+                new Class<?>[]{listenerClass},
+                (proxy, method, args) -> {
+                    if ("onPreferenceClick".equals(method.getName())) {
+                        showIncompatibleDialog(context);
+                        return true;
+                    }
+                    return handleObjectMethod(proxy, method.getName(), args,
+                            "BiliFixIncompatibleHostClickListener");
+                });
+    }
+
+    private void showIncompatibleDialog(Context context) {
+        if (context == null) {
+            module.warn("incompatible host dialog skipped: context=null");
+            return;
+        }
+        String versionName = module.hostVersion().versionName();
+        String name = versionName == null || versionName.isEmpty() ? "未知" : versionName;
+        long versionCode = module.hostVersion().versionCode();
+        String version = versionCode < 0 ? name : name + "，版本代码 " + versionCode;
+        String message = "此版本BiliFix专为3.20.4版本打造，"
+                + "不兼容你当前使用的 B 站版本（" + version + "）。\n\n"
+                + "请查看新版说明，使用对应版本的 BiliFix。";
+        try {
+            new AlertDialog.Builder(context)
+                    .setTitle("不兼容")
+                    .setMessage(message)
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("查看新版说明", (dialog, which) -> {
+                        try {
+                            context.startActivity(new Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse(PROJECT_MODERN_NOTICE_URL)));
+                            module.info("modern compatibility notice opened: "
+                                    + PROJECT_MODERN_NOTICE_URL);
+                        } catch (Throwable throwable) {
+                            module.error("modern compatibility notice launch failed", throwable);
+                            Toast.makeText(context, "无法打开说明", Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .show();
+            module.warn("incompatible host dialog shown: host=" + module.hostVersion());
+        } catch (Throwable throwable) {
+            module.error("incompatible host dialog display failed: host="
+                    + module.hostVersion(), throwable);
+        }
     }
 
     private static Object handleObjectMethod(
