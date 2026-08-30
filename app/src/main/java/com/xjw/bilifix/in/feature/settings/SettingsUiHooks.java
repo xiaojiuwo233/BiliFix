@@ -312,7 +312,7 @@ final class SettingsUiHooks {
                             addSwitch(enhanceCategory, switchConstructor,
                                     KEY_COMMENT_FREE_COPY_ENABLED,
                                     "自由复制",
-                                    "视频简介与评论自由复制，来自哔哩漫游",
+                                    "视频简介、评论与私信消息自由复制，来自哔哩漫游",
                                     settings.isCommentFreeCopyEnabled(), 2,
                                     changeListenerClass, context,
                                     addPreference, setKey, setTitle, setSummary,

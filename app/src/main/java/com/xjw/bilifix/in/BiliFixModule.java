@@ -23,6 +23,7 @@ import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostVersion;
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.feature.commentcopy.CommentFreeCopyHooks;
+import com.xjw.bilifix.in.feature.commentcopy.DirectMessageFreeCopyHooks;
 import com.xjw.bilifix.in.feature.commentcopy.VideoDescriptionFreeCopyHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
 import com.xjw.bilifix.in.feature.modern.Modern626FeatureHooks;
@@ -114,6 +115,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         if (mainProcess && hostVersion.isModern626OrNewer()) {
             new CommentFreeCopyHooks(this, classLoader).install();
             new VideoDescriptionFreeCopyHooks(this, classLoader).install();
+            new DirectMessageFreeCopyHooks(this, classLoader).install();
         }
         if (hostVersion.isModern626OrNewer()) {
             if (mainProcess) {
