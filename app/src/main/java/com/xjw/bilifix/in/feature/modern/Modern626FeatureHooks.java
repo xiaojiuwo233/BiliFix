@@ -44,6 +44,7 @@ public final class Modern626FeatureHooks {
     private final AtomicBoolean storyResolverUiHookInstalled = new AtomicBoolean(false);
     private final AtomicBoolean storyResolutionStarted = new AtomicBoolean(false);
     private final AtomicBoolean modernHomeHooksInstalled = new AtomicBoolean(false);
+    private final AtomicBoolean modern640HomePatchLogged = new AtomicBoolean(false);
 
     public Modern626FeatureHooks(
             HookApi module,
@@ -59,16 +60,308 @@ public final class Modern626FeatureHooks {
      * resources.
      */
     public void installEarly() {
-        installGroupOnce(
-                modernHomeHooksInstalled, "6.2.6 KHome direct entries",
-                this::installModernHomeEntryHooks);
-        if (module.hostVersion().isModern630OrNewer()) {
-            module.info("6.3.0 live entry uses JA1/Sf0 home model hooks; "
-                    + "6.2.6 resource-cache fallback skipped");
+        if (module.hostVersion().isExact626() || module.hostVersion().isExact630()) {
+            installGroupOnce(
+                    modernHomeHooksInstalled, "6.2.6 KHome direct entries",
+                    this::installModernHomeEntryHooks);
+        } else if (module.hostVersion().isModern640OrNewer()) {
+            installGroupOnce(
+                    modernHomeHooksInstalled, "6.4 KHome entries",
+                    this::installModern640HomeDataHook);
         } else {
             installGroupOnce(
-                    liveHooksInstalled, "6.2.6 live entry", this::installLiveEntryHook);
+                    liveHooksInstalled, "modern resource-cache live entry",
+                    this::installLiveEntryHook);
+            module.info("unknown modern host: using resource-cache live entry fallback");
         }
+    }
+
+    private void installModern640HomeDataHook() throws Throwable {
+        Class<?> dataClass;
+        Class<?> itemClass;
+        Constructor<?> itemConstructor;
+        Field topRightField;
+        Field topTabField;
+        Field bottomTabField;
+        Field itemUriField;
+        Class<?> frameStateClass;
+        Field frameTabData;
+        Method copyFrameState;
+        Method topRightConverter = null;
+        Field topRightConverterInput = null;
+        try {
+            dataClass = module.load(classLoader, "JC1.l");
+            itemClass = module.load(classLoader, "JC1.n");
+            itemConstructor = itemClass.getConstructor(
+                    String.class, String.class, String.class, String.class, String.class,
+                    int.class, int.class, String.class, List.class, int.class, int.class);
+            topRightField = module.declaredField(dataClass, "a");
+            topTabField = module.declaredField(dataClass, "b");
+            bottomTabField = module.declaredField(dataClass, "c");
+            itemUriField = module.declaredField(itemClass, "c");
+            frameStateClass = module.load(classLoader, "DC1.a");
+            Class<?> configClass = module.load(classLoader, "JC1.d");
+            Class<?> uiStateClass = module.load(classLoader, "KC1.e");
+            Class<?> visibleStateClass = module.load(classLoader, "KC1.f");
+            frameTabData = module.declaredField(frameStateClass, "b");
+            copyFrameState = module.declaredMethod(frameStateClass, "a",
+                    frameStateClass, configClass, dataClass, uiStateClass,
+                    visibleStateClass, boolean.class, int.class);
+        } catch (Throwable exactSymbolsUnavailable) {
+            if (symbolResolver == null) {
+                throw exactSymbolsUnavailable;
+            }
+            DexSymbolResolver.ModernHomeSymbols symbols =
+                    symbolResolver.resolveModernHomeSymbols();
+            if (symbols == null) {
+                throw exactSymbolsUnavailable;
+            }
+            dataClass = symbols.dataClass();
+            itemClass = symbols.itemClass();
+            itemConstructor = symbols.itemConstructor();
+            topRightField = symbols.topRightField();
+            topTabField = symbols.topTabField();
+            bottomTabField = symbols.bottomTabField();
+            itemUriField = symbols.itemUriField();
+            frameStateClass = symbols.frameStateClass();
+            frameTabData = symbols.frameTabData();
+            copyFrameState = symbols.frameCopy();
+            topRightConverter = symbols.topRightConverter();
+            topRightConverterInput = symbols.topRightConverterInput();
+            module.info("modern home symbols adaptive fallback active: "
+                    + symbols.evidence());
+        }
+
+        final Class<?> homeDataClass = dataClass;
+        final Class<?> homeItemClass = itemClass;
+        final Constructor<?> homeItemConstructor = itemConstructor;
+        final Field homeTopRightField = topRightField;
+        final Field homeTopTabField = topTabField;
+        final Field homeBottomTabField = bottomTabField;
+        final Field homeItemUriField = itemUriField;
+        final Field homeFrameTabData = frameTabData;
+        final Method homeCopyFrameState = copyFrameState;
+
+        int installed = 0;
+        for (Constructor<?> constructor : homeDataClass.getDeclaredConstructors()) {
+            if (!isKHomeDataConstructor(constructor)) {
+                continue;
+            }
+            constructor.setAccessible(true);
+            module.addHook("JC1.l restore 6.4 home entries", constructor, chain -> {
+                Object result = chain.proceed();
+                module.ensureFeatureSettings(currentApplication());
+                Object data = chain.getThisObject();
+                patchModern640HomeData(data, homeItemClass, homeItemConstructor,
+                        homeTopRightField, homeTopTabField, homeBottomTabField,
+                        homeItemUriField);
+                return result;
+            });
+            installed++;
+        }
+        if (installed == 0) {
+            throw new NoSuchMethodException("JC1.l data constructors unavailable");
+        }
+
+        // Cached raw data can be created before BiliApp.attachBaseContext has
+        // loaded feature settings. Every real HomeFrame state update goes
+        // through DC1.a.copy, so patch the resulting state as the final guard
+        // immediately before Compose observes it.
+        module.deoptimizeFeatureMethod(homeCopyFrameState);
+        module.addHook("DC1.a final 6.4 home entries", homeCopyFrameState, chain -> {
+            Object result = chain.proceed();
+            module.ensureFeatureSettings(currentApplication());
+            Object data = result == null ? null : homeFrameTabData.get(result);
+            patchModern640HomeData(data, homeItemClass, homeItemConstructor,
+                    homeTopRightField, homeTopTabField, homeBottomTabField,
+                    homeItemUriField);
+            return result;
+        });
+        try {
+            installModern640TopRightConverterHook(homeItemClass, homeItemConstructor,
+                    homeItemUriField,
+                    topRightConverter, topRightConverterInput);
+        } catch (Throwable throwable) {
+            // The converter is a generated coroutine class and may be loaded
+            // lazily on a future host build. Do not lose the stable JC1/DC1
+            // data hooks if that optional UI guard is renamed.
+            module.warn("6.4 top-right converter hook unavailable: " + throwable);
+        }
+        module.info("6.4 KHome constructor hooks installed: count=" + installed);
+    }
+
+    private void installModern640TopRightConverterHook(
+            Class<?> itemClass, Constructor<?> itemConstructor, Field itemUriField,
+            Method resolvedConverter, Field resolvedInput)
+            throws Throwable {
+        Method invokeSuspend = resolvedConverter;
+        Field inputField = resolvedInput;
+        if (invokeSuspend == null || inputField == null) {
+            Class<?> converterClass = module.load(classLoader,
+                    "tv.danmaku.bili.home.components.topbar.TopRightComponent$initTopRight$1$1");
+            invokeSuspend = module.declaredMethod(
+                    converterClass, "invokeSuspend", Object.class);
+            inputField = module.declaredField(converterClass, "L$0");
+        }
+        final Method converterMethod = invokeSuspend;
+        final Field converterInputField = inputField;
+        module.deoptimizeFeatureMethod(converterMethod);
+        module.addHook("6.4 top-right raw message converter", converterMethod, chain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isModernMessageTopRightEnabled()) {
+                return chain.proceed();
+            }
+            Object input = converterInputField.get(chain.getThisObject());
+            if (!(input instanceof List)) {
+                return chain.proceed();
+            }
+            List<?> original = (List<?>) input;
+            ArrayList<Object> patched = new ArrayList<>(original.size() + 1);
+            Object message = null;
+            for (Object item : original) {
+                if (item != null && isMessageRoute(String.valueOf(itemUriField.get(item)))) {
+                    if (message == null) {
+                        message = item;
+                    }
+                    // The 6.4 converter recognizes this canonical URI and
+                    // creates its normal eC1.a click action from it.
+                    itemUriField.set(item, MESSAGE_ROUTE_URI);
+                    continue;
+                }
+                patched.add(item);
+            }
+            if (message == null) {
+                message = itemConstructor.newInstance(
+                        "38", "消息", MESSAGE_ROUTE_URI, null, null,
+                        0, 0, null, null, 0, 131064);
+            }
+            patched.add(0, message);
+            converterInputField.set(chain.getThisObject(), patched);
+            module.info("6.4 top-right message raw item injected: before="
+                    + original.size() + " after=" + patched.size()
+                    + " uri=" + MESSAGE_ROUTE_URI);
+            return chain.proceed();
+        });
+        module.info("6.4 top-right converter hook installed: method=" + converterMethod);
+    }
+
+    private void patchModern640HomeData(
+            Object data,
+            Class<?> itemClass,
+            Constructor<?> itemConstructor,
+            Field topRightField,
+            Field topTabField,
+            Field bottomTabField,
+            Field itemUriField) throws Throwable {
+        if (data == null) {
+            return;
+        }
+        List<?> originalTopRight = listValue(topRightField.get(data));
+        List<?> originalTopTabs = listValue(topTabField.get(data));
+        List<?> originalBottomTabs = listValue(bottomTabField.get(data));
+        ArrayList<Object> topRight = new ArrayList<>(originalTopRight);
+        ArrayList<Object> topTabs = new ArrayList<>(originalTopTabs);
+        ArrayList<Object> bottomTabs = new ArrayList<>(originalBottomTabs);
+        boolean changed = false;
+
+        if (module.isModernMessageTopRightEnabled()) {
+            Object bottomMessage = removeMessageItems(bottomTabs, itemUriField);
+            if (!containsAnyMessage(topRight, itemUriField)) {
+                Object message = bottomMessage != null ? bottomMessage
+                        : itemConstructor.newInstance(
+                        "38", "消息", MESSAGE_ROUTE_URI, null, null,
+                        0, 0, null, null, 0, 131064);
+                // TopRightComponent only constructs the message action for the
+                // canonical route. It rewrites this to action://link/home/menu
+                // itself after resolving redirects and query parameters.
+                itemUriField.set(message, MESSAGE_ROUTE_URI);
+                topRight.add(0, message);
+                changed = true;
+            }
+            changed |= bottomMessage != null;
+        }
+
+        if (module.isModernLiveEnabled()
+                && !containsRoute(topTabs, itemClass.getName(), "c", LIVE_URI)) {
+            Object live = itemConstructor.newInstance(
+                    "168", "直播", LIVE_URI, null, null,
+                    0, 0, "直播tab", null, 0, 130936);
+            int recommended = indexOfRoute(
+                    topTabs, itemUriField, "bilibili://pegasus/promo");
+            topTabs.add(recommended < 0 ? 0 : recommended, live);
+            changed = true;
+        }
+
+        if (!changed) {
+            return;
+        }
+        topRightField.set(data, topRight);
+        topTabField.set(data, topTabs);
+        bottomTabField.set(data, bottomTabs);
+        if (modern640HomePatchLogged.compareAndSet(false, true)) {
+            module.info("6.4 KHome entries restored: topRight="
+                    + originalTopRight.size() + "->" + topRight.size()
+                    + " topTabs=" + originalTopTabs.size() + "->"
+                    + topTabs.size() + " bottom="
+                    + originalBottomTabs.size() + "->" + bottomTabs.size());
+        }
+    }
+
+    private static boolean isKHomeDataConstructor(Constructor<?> constructor) {
+        Class<?>[] parameters = constructor.getParameterTypes();
+        int listCount = 0;
+        for (Class<?> parameter : parameters) {
+            if (List.class.isAssignableFrom(parameter)) {
+                listCount++;
+            }
+        }
+        return listCount == 4;
+    }
+
+    private static List<?> listValue(Object value) {
+        return value instanceof List ? (List<?>) value : Collections.emptyList();
+    }
+
+    private static Object removeMessageItems(
+            ArrayList<Object> items, Field uriField) throws IllegalAccessException {
+        Object first = null;
+        for (int index = items.size() - 1; index >= 0; index--) {
+            Object item = items.get(index);
+            String uri = item == null ? null : String.valueOf(uriField.get(item));
+            if (!isMessageRoute(uri)) {
+                continue;
+            }
+            first = item;
+            items.remove(index);
+        }
+        return first;
+    }
+
+    private static boolean containsAnyMessage(List<?> items, Field uriField)
+            throws IllegalAccessException {
+        for (Object item : items) {
+            if (item != null && isMessageRoute(String.valueOf(uriField.get(item)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isMessageRoute(String uri) {
+        return "bilibili://im/home_tab".equals(uri)
+                || "bilibili://link/im_home".equals(uri)
+                || "action://link/home/menu".equals(uri);
+    }
+
+    private static int indexOfRoute(List<?> items, Field uriField, String route)
+            throws IllegalAccessException {
+        for (int index = 0; index < items.size(); index++) {
+            Object item = items.get(index);
+            if (item != null && route.equals(String.valueOf(uriField.get(item)))) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private void installModernHomeEntryHooks() {
@@ -287,7 +580,9 @@ public final class Modern626FeatureHooks {
 
         Class<?> homeFragmentClass = module.load(classLoader,
                 "tv.danmaku.bili.ui.main2.HomeFragmentV2");
-        Method buildHomeTabs = module.declaredMethod(homeFragmentClass, "zm");
+        Method buildHomeTabs = module.declaredMethod(
+                homeFragmentClass,
+                module.hostVersion().isModern640OrNewer() ? "Ml" : "zm");
         Field singletonField = module.declaredField(managerClass, "q");
         Field tabCacheField = module.declaredField(managerClass, "d");
         boolean homeTabsDeoptimized = module.deoptimizeFeatureMethod(buildHomeTabs);

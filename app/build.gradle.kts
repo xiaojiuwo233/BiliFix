@@ -57,8 +57,8 @@ android {
         applicationId = "com.xjw.bilifix.in"
         minSdk = 29
         targetSdk = 36
-        versionCode = 62636
-        versionName = "b6-0.4.4"
+        versionCode = 62637
+        versionName = "b6-0.5.0"
     }
 
     signingConfigs {
@@ -108,11 +108,11 @@ dependencies {
         isTransitive = false
     }
     implementation("org.luckypray:dexkit:2.2.0")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.22")
 }
 
 configurations.configureEach {
     if (name.endsWith("RuntimeClasspath")) {
-        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
         exclude(group = "org.jetbrains", module = "annotations")
     }
 }

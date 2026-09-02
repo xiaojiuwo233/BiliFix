@@ -3,15 +3,20 @@ package com.xjw.bilifix.in.feature.modern.story;
 import android.app.Application;
 import android.content.Context;
 import android.net.Uri;
+import android.view.View;
 
+import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,20 +39,26 @@ public final class ModernStoryEntryHooks {
     };
     private static final Pattern JSON_DIMENSION = Pattern.compile(
             "\\\"(width|height)\\\"\\s*:\\s*(\\d+)");
+    private static final Pattern JSON_AID = Pattern.compile(
+            "\\\"(?:aid|avid)\\\"\\s*:\\s*\\\"?(\\d+)");
 
     private final HookApi module;
     private final ClassLoader classLoader;
+    private final DexSymbolResolver symbolResolver;
     private final AtomicBoolean installed = new AtomicBoolean(false);
     private final AtomicBoolean homeRouteLogged = new AtomicBoolean(false);
     private final AtomicBoolean homeMissingAidLogged = new AtomicBoolean(false);
+    private final AtomicInteger homeCardSampleCount = new AtomicInteger();
     private final Set<String> playerGateLogged = ConcurrentHashMap.newKeySet();
     private final Set<String> playerVerticalGateLogged = ConcurrentHashMap.newKeySet();
     private final Set<String> playerIconLogged = ConcurrentHashMap.newKeySet();
 
     private volatile Application application;
-    public ModernStoryEntryHooks(HookApi module, ClassLoader classLoader) {
+    public ModernStoryEntryHooks(
+            HookApi module, ClassLoader classLoader, DexSymbolResolver symbolResolver) {
         this.module = module;
         this.classLoader = classLoader;
+        this.symbolResolver = symbolResolver;
     }
 
     public void install() {
@@ -60,6 +71,10 @@ public final class ModernStoryEntryHooks {
     }
 
     private void installHomeCardHooks() throws Throwable {
+        if (module.hostVersion().isModern640OrNewer()) {
+            installPegasusCardClickProcessorHook();
+            return;
+        }
         String routerClassName = module.hostVersion().isModern630OrNewer()
                 ? ROUTER_630 : ROUTER_626;
         Class<?> routerClass = module.load(classLoader, routerClassName);
@@ -111,6 +126,290 @@ public final class ModernStoryEntryHooks {
         if (module.hostVersion().isModern630OrNewer()) {
             installInlineHomeRouteHook(routerClassName, routerClass);
         }
+    }
+
+    private void installPegasusCardClickProcessorHook() throws Throwable {
+        Class<?> processorClass = module.load(classLoader,
+                "com.bilibili.pegasus.card.base.CardClickProcessor");
+        Method route = findPegasusCardRouteMethod(processorClass);
+        Class<?> cardClass = route.getParameterTypes()[2];
+        module.deoptimizeFeatureMethod(route);
+        module.addHook("CardClickProcessor.f route vertical card", route, chain -> {
+            ensureSettings();
+            if (!module.isModernStoryMasterEnabled()
+                    || !module.isModernStoryHomeCardEnabled()) {
+                return chain.proceed();
+            }
+            Object card = chain.getArg(2);
+            Uri explicitUri = chain.getArg(3) instanceof Uri
+                    ? (Uri) chain.getArg(3) : null;
+            Uri cardUri = parseUri(invokeString(card, "getUri"));
+            logHomeCardSample("dispatcher", card, cardUri, explicitUri);
+            if (!isVerticalCard(card, cardUri, explicitUri)) {
+                return chain.proceed();
+            }
+            Uri original = explicitUri != null ? explicitUri : cardUri;
+            long aid = resolveCardAid(card, cardUri, explicitUri);
+            Uri target = buildStoryUri(original, aid);
+            if (target == null) {
+                if (homeMissingAidLogged.compareAndSet(false, true)) {
+                    module.warn("6.4 vertical card route has no aid: class="
+                            + (card == null ? "null" : card.getClass().getName())
+                            + " goto=" + readString(card, "goTo")
+                            + " cardGoto=" + readString(card, "cardGoto")
+                            + " uri=" + original);
+                }
+                return chain.proceed();
+            }
+            Object[] arguments = chain.getArgs().toArray();
+            arguments[3] = target;
+            if (homeRouteLogged.compareAndSet(false, true)) {
+                module.info("6.4 home vertical-card redirect active: class="
+                        + card.getClass().getName() + " title="
+                        + readString(card, "title") + " aid=" + aid
+                        + " goto=" + readString(card, "goTo")
+                        + " cardGoto=" + readString(card, "cardGoto")
+                        + " source=" + original + " target=" + target);
+            }
+            return chain.proceed(arguments);
+        });
+        module.info("6.4 Pegasus home vertical-card router hook installed: method="
+                + route);
+
+        Method click = findPegasusCardClickMethod(processorClass);
+        Class<?> holderClass = click.getParameterTypes()[1];
+        Method holderData = findHolderDataMethod(holderClass, cardClass);
+        Method setUri = findStringSetter(cardClass);
+        module.deoptimizeFeatureMethod(click);
+        module.addHook("CardClickProcessor.v prepare vertical card", click, chain -> {
+            ensureSettings();
+            if (!module.isModernStoryMasterEnabled()
+                    || !module.isModernStoryHomeCardEnabled()) {
+                return chain.proceed();
+            }
+            Object holder = chain.getArg(1);
+            Object card = holder == null ? null : holderData.invoke(holder);
+            Uri cardUri = parseUri(invokeString(card, "getUri"));
+            logHomeCardSample("holder", card, cardUri, null);
+            if (!isVerticalCard(card, cardUri)) {
+                return chain.proceed();
+            }
+            long aid = resolveCardAid(card, cardUri, null);
+            Uri target = buildStoryUri(cardUri, aid);
+            if (target == null) {
+                return chain.proceed();
+            }
+            setUri.invoke(card, target.toString());
+            if (homeRouteLogged.compareAndSet(false, true)) {
+                module.info("6.4 home vertical-card redirect active: entry=holder"
+                        + " class=" + card.getClass().getName()
+                        + " aid=" + aid + " source=" + cardUri
+                        + " target=" + target);
+            }
+            return chain.proceed();
+        });
+        module.info("6.4 Pegasus holder click hook installed: method=" + click);
+
+        Class<?> routeHelperClass = module.load(classLoader, "yF0.b");
+        Class<?> routeResponseClass = module.load(classLoader,
+                "com.bilibili.lib.blrouter.RouteResponse");
+        Method centralRoute = module.declaredMethod(routeHelperClass, "q",
+                Context.class, Uri.class, String.class, String.class, String.class,
+                Map.class, int.class, boolean.class);
+        if (!routeResponseClass.isAssignableFrom(centralRoute.getReturnType())) {
+            throw new NoSuchMethodException("unexpected Pegasus route response: "
+                    + centralRoute);
+        }
+        module.deoptimizeFeatureMethod(centralRoute);
+        module.addHook("Pegasus central route vertical card", centralRoute, chain -> {
+            ensureSettings();
+            if (!module.isModernStoryMasterEnabled()
+                    || !module.isModernStoryHomeCardEnabled()) {
+                return chain.proceed();
+            }
+            Uri source = chain.getArg(1) instanceof Uri ? (Uri) chain.getArg(1) : null;
+            String first = chain.getArg(2) instanceof String
+                    ? (String) chain.getArg(2) : null;
+            String second = chain.getArg(3) instanceof String
+                    ? (String) chain.getArg(3) : null;
+            String third = chain.getArg(4) instanceof String
+                    ? (String) chain.getArg(4) : null;
+            int sample = homeCardSampleCount.incrementAndGet();
+            if (module.isVerboseLoggingEnabled() && sample <= 40) {
+                module.debug("6.4 Pegasus central route sample=" + sample
+                        + " uri=" + source + " first=" + first
+                        + " second=" + second + " third=" + third);
+            }
+            if (!isVerticalUri(source)
+                    && !VERTICAL_AV.equals(first)
+                    && !VERTICAL_AV.equals(second)
+                    && !VERTICAL_AV.equals(third)
+                    && !"story_item".equals(first)
+                    && !"story_item".equals(second)
+                    && !"story_item".equals(third)) {
+                return chain.proceed();
+            }
+            Uri target = buildStoryUri(source, 0L);
+            if (target == null) {
+                return chain.proceed();
+            }
+            Object[] arguments = chain.getArgs().toArray();
+            arguments[1] = target;
+            if (homeRouteLogged.compareAndSet(false, true)) {
+                module.info("6.4 home vertical-card redirect active: entry=central-router"
+                        + " source=" + source + " target=" + target);
+            }
+            return chain.proceed(arguments);
+        });
+        module.info("6.4 Pegasus central router hook installed: method=" + centralRoute);
+
+        Method finalRoute = module.declaredMethod(routeHelperClass, "r",
+                Context.class, Uri.class, String.class, String.class, String.class,
+                LinkedHashMap.class, int.class, String.class, int.class);
+        module.deoptimizeFeatureMethod(finalRoute);
+        module.addHook("Pegasus final route vertical card", finalRoute, chain -> {
+            ensureSettings();
+            if (!module.isModernStoryMasterEnabled()
+                    || !module.isModernStoryHomeCardEnabled()) {
+                return chain.proceed();
+            }
+            Uri source = chain.getArg(1) instanceof Uri ? (Uri) chain.getArg(1) : null;
+            Object mapValue = chain.getArg(5);
+            Map<?, ?> params = mapValue instanceof Map ? (Map<?, ?>) mapValue : null;
+            String goTo = chain.getArg(7) instanceof String
+                    ? (String) chain.getArg(7) : null;
+            boolean storyPayload = params != null && params.containsKey("story_item");
+            if (!VERTICAL_AV.equals(goTo) && !storyPayload && !isVerticalUri(source)) {
+                return chain.proceed();
+            }
+            long aid = resolveRouteAid(source, params);
+            Uri target = buildStoryUri(source, aid);
+            if (target == null) {
+                if (homeMissingAidLogged.compareAndSet(false, true)) {
+                    module.warn("6.4 final vertical route has no aid: goto=" + goTo
+                            + " uri=" + source + " params=" + params);
+                }
+                return chain.proceed();
+            }
+            Object[] arguments = chain.getArgs().toArray();
+            arguments[1] = target;
+            if (homeRouteLogged.compareAndSet(false, true)) {
+                module.info("6.4 home vertical-card redirect active: entry=final-router"
+                        + " goto=" + goTo + " source=" + source
+                        + " target=" + target);
+            }
+            return chain.proceed(arguments);
+        });
+        module.info("6.4 Pegasus final router hook installed: method=" + finalRoute);
+        installModern640HolderRouteHook();
+    }
+
+    private void installModern640HolderRouteHook() throws Throwable {
+        Class<?> routeClass;
+        Class<?> holderDataClass;
+        Method route;
+        try {
+            routeClass = module.load(classLoader, "WE0.a");
+            holderDataClass = module.load(classLoader, "ME0.a");
+            Class<?> specialSpmidClass = module.load(classLoader,
+                    "com.bilibili.pegasus.ext.router.SpecialSpmidType");
+            route = module.declaredMethod(routeClass, "d",
+                    Context.class, holderDataClass, Uri.class,
+                    String.class, String.class, String.class, String.class,
+                    boolean.class, specialSpmidClass, Map.class);
+        } catch (Throwable exactSymbolsUnavailable) {
+            if (symbolResolver == null) {
+                throw exactSymbolsUnavailable;
+            }
+            DexSymbolResolver.PegasusHolderRouteSymbols symbols =
+                    symbolResolver.resolvePegasusHolderRouteSymbols();
+            if (symbols == null) {
+                throw exactSymbolsUnavailable;
+            }
+            route = symbols.route();
+            routeClass = route.getDeclaringClass();
+            holderDataClass = route.getParameterTypes()[1];
+            module.info("6.4 Pegasus holder route adaptive fallback active: method="
+                    + route + " holder=" + holderDataClass.getName());
+        }
+        module.deoptimizeFeatureMethod(route);
+        module.addHook("WE0 holder final route vertical card", route, chain -> {
+            ensureSettings();
+            if (!module.isModernStoryMasterEnabled()
+                    || !module.isModernStoryHomeCardEnabled()) {
+                return chain.proceed();
+            }
+            Object card = chain.getArg(1);
+            Uri explicit = chain.getArg(2) instanceof Uri
+                    ? (Uri) chain.getArg(2) : null;
+            Uri cardUri = parseUri(invokeString(card, "getUri"));
+            String cardGoto = invokeString(card, "getCardGoto");
+            String cardType = invokeString(card, "getCardType");
+            Object cardArgs = invokeNoArgs(card, "getArgs");
+            long aid = invokeLong(card, "getId");
+            if (aid <= 0) {
+                aid = invokeLong(card, "getParam");
+            }
+            if (aid <= 0) {
+                aid = invokeLong(cardArgs, "a");
+            }
+            boolean vertical = VERTICAL_AV.equals(cardGoto)
+                    || VERTICAL_AV.equals(cardType)
+                    || isVerticalUri(cardUri)
+                    || isVerticalUri(explicit);
+            if (module.isVerboseLoggingEnabled()) {
+                int sample = homeCardSampleCount.incrementAndGet();
+                if (sample <= 40) {
+                    module.debug("6.4 WE0 holder route sample=" + sample
+                            + " goto=" + cardGoto + " cardType=" + cardType
+                            + " aid=" + aid + " uri=" + cardUri
+                            + " explicit=" + explicit);
+                }
+            }
+            if (!vertical) {
+                return chain.proceed();
+            }
+            Uri original = explicit != null ? explicit : cardUri;
+            Uri target = buildStoryUri(original, aid);
+            if (target == null) {
+                return chain.proceed();
+            }
+            Object[] arguments = chain.getArgs().toArray();
+            arguments[2] = target;
+            if (homeRouteLogged.compareAndSet(false, true)) {
+                module.info("6.4 home vertical-card redirect active: entry=WE0-holder"
+                        + " goto=" + cardGoto + " cardType=" + cardType
+                        + " aid=" + aid + " source=" + original
+                        + " target=" + target);
+            }
+            return chain.proceed(arguments);
+        });
+        module.info("6.4 WE0 holder final router hook installed: method=" + route);
+    }
+
+    private void logHomeCardSample(
+            String entry, Object card, Uri cardUri, Uri explicitUri) {
+        if (!module.isVerboseLoggingEnabled()) {
+            return;
+        }
+        int sample = homeCardSampleCount.incrementAndGet();
+        if (sample > 40) {
+            return;
+        }
+        Object args = readField(card, "args");
+        Object playerArgs = readField(card, "playerArgs");
+        module.debug("6.4 home card click sample=" + sample
+                + " entry=" + entry
+                + " class=" + (card == null ? "null" : card.getClass().getName())
+                + " goto=" + readString(card, "goTo")
+                + " cardGoto=" + readString(card, "cardGoto")
+                + " cardType=" + readString(card, "cardType")
+                + " param=" + readString(card, "param")
+                + " argsAid=" + invokeLong(args, "aid")
+                + " playerAid=" + invokeLong(playerArgs, "aid")
+                + " videoType=" + readString(playerArgs, "videoType")
+                + " contentMode=" + invokeLong(playerArgs, "contentMode")
+                + " cardUri=" + cardUri + " explicitUri=" + explicitUri);
     }
 
     private void installInlineHomeRouteHook(String routerClassName, Class<?> routerClass)
@@ -168,21 +467,44 @@ public final class ModernStoryEntryHooks {
     }
 
     private void installPlayerButtonHooks() throws Throwable {
-        String availabilityMethod = module.hostVersion().isModern630OrNewer()
-                ? "C" : "r0";
-        String verticalSwitchMethod = module.hostVersion().isModern630OrNewer()
-                ? "P" : "C0";
-        String iconMethod = module.hostVersion().isModern630OrNewer()
-                ? "b0" : "N0";
+        boolean modern640 = module.hostVersion().isModern640OrNewer();
+        String availabilityMethod = modern640 ? "c0"
+                : module.hostVersion().isModern630OrNewer() ? "C" : "r0";
+        String verticalSwitchMethod = modern640 ? "o0"
+                : module.hostVersion().isModern630OrNewer() ? "P" : "C0";
+        String iconMethod = modern640 ? "A0"
+                : module.hostVersion().isModern630OrNewer() ? "b0" : "N0";
         int installedDelegates = 0;
         for (String className : PLAYER_ACTION_DELEGATES) {
             try {
                 Class<?> delegateClass = module.load(classLoader, className);
-                Method availability = module.declaredMethod(
-                        delegateClass, availabilityMethod);
-                Method verticalSwitch = module.declaredMethod(
-                        delegateClass, verticalSwitchMethod);
-                Method icon = module.declaredMethod(delegateClass, iconMethod);
+                Method availability;
+                Method verticalSwitch;
+                Method icon;
+                try {
+                    availability = module.declaredMethod(
+                            delegateClass, availabilityMethod);
+                    verticalSwitch = module.declaredMethod(
+                            delegateClass, verticalSwitchMethod);
+                    icon = module.declaredMethod(delegateClass, iconMethod);
+                } catch (NoSuchMethodException renamed) {
+                    DexSymbolResolver.StoryPlayerSymbols adaptive = symbolResolver == null
+                            ? null : symbolResolver.resolveStoryPlayerSymbols(delegateClass);
+                    if (adaptive == null) {
+                        throw renamed;
+                    }
+                    availability = adaptive.availability();
+                    verticalSwitch = adaptive.verticalSwitch();
+                    icon = adaptive.icon();
+                    module.info("modern player Story methods adaptive fallback: class="
+                            + className + " evidence=" + adaptive.evidence());
+                }
+                if (availability.getReturnType() != boolean.class
+                        || verticalSwitch.getReturnType() != boolean.class
+                        || icon.getReturnType() != String.class) {
+                    throw new NoSuchMethodException("Story delegate signature mismatch: "
+                            + availability + ", " + verticalSwitch + ", " + icon);
+                }
                 module.addHook(className + "." + availabilityMethod
                                 + " restore Story availability",
                         availability, chain -> {
@@ -255,6 +577,131 @@ public final class ModernStoryEntryHooks {
 
     private String resolveFallbackStoryIcon() {
         return OFFICIAL_LANDSCAPE_STORY_ICON;
+    }
+
+    /** Locate the Pegasus card dispatcher by its stable Kotlin signature. */
+    private static Method findPegasusCardRouteMethod(Class<?> processorClass)
+            throws NoSuchMethodException {
+        Method candidate = null;
+        for (Method method : processorClass.getDeclaredMethods()) {
+            Class<?>[] parameters = method.getParameterTypes();
+            if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                    || method.getReturnType() != void.class
+                    || parameters.length != 10
+                    || parameters[0] != processorClass
+                    || parameters[1] != Context.class
+                    || parameters[3] != Uri.class
+                    || parameters[4] != String.class
+                    || parameters[5] != String.class
+                    || parameters[6] != boolean.class
+                    || parameters[7] != int.class
+                    || !Map.class.isAssignableFrom(parameters[8])
+                    || parameters[9] != int.class) {
+                continue;
+            }
+            if (candidate != null) {
+                throw new NoSuchMethodException(
+                        "multiple Pegasus card routes: " + candidate + ", " + method);
+            }
+            candidate = method;
+        }
+        if (candidate == null) {
+            throw new NoSuchMethodException("Pegasus card route not found");
+        }
+        candidate.setAccessible(true);
+        return candidate;
+    }
+
+    /** Locate the holder click dispatcher without relying on its short name. */
+    private static Method findPegasusCardClickMethod(Class<?> processorClass)
+            throws NoSuchMethodException {
+        Method candidate = null;
+        for (Method method : processorClass.getDeclaredMethods()) {
+            Class<?>[] parameters = method.getParameterTypes();
+            if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                    || method.getReturnType() != void.class
+                    || parameters.length != 8
+                    || parameters[0] != processorClass
+                    || parameters[2] != View.class
+                    || parameters[3] != boolean.class
+                    || parameters[4] != boolean.class
+                    || parameters[5] != boolean.class
+                    || parameters[6] != boolean.class
+                    || parameters[7] != int.class) {
+                continue;
+            }
+            if (candidate != null) {
+                throw new NoSuchMethodException(
+                        "multiple Pegasus holder click routes: " + candidate
+                                + ", " + method);
+            }
+            candidate = method;
+        }
+        if (candidate == null) {
+            throw new NoSuchMethodException("Pegasus holder click route not found");
+        }
+        candidate.setAccessible(true);
+        return candidate;
+    }
+
+    private static Method findHolderDataMethod(Class<?> holderClass, Class<?> cardClass)
+            throws NoSuchMethodException {
+        Method candidate = null;
+        for (Method method : holderClass.getMethods()) {
+            if (method.getParameterCount() != 0
+                    || method.getReturnType() == Object.class
+                    || !method.getReturnType().isAssignableFrom(cardClass)) {
+                continue;
+            }
+            if (candidate != null) {
+                throw new NoSuchMethodException(
+                        "multiple holder data methods: " + candidate + ", " + method);
+            }
+            candidate = method;
+        }
+        if (candidate == null) {
+            throw new NoSuchMethodException("holder data method not found in "
+                    + holderClass.getName());
+        }
+        candidate.setAccessible(true);
+        return candidate;
+    }
+
+    private static Method findStringSetter(Class<?> type) throws NoSuchMethodException {
+        try {
+            // BasicIndexItem keeps this JSON property name unobfuscated. It is
+            // the only reliable discriminator because the model also exposes
+            // translatedText/translatedStatus String setters.
+            Method semantic = type.getMethod("setUri", String.class);
+            if (semantic.getReturnType() == void.class) {
+                semantic.setAccessible(true);
+                return semantic;
+            }
+        } catch (NoSuchMethodException ignored) {
+            // A future model may rename the Java accessor; use the shape
+            // fallback below when it has become unambiguous.
+        }
+        Method candidate = null;
+        for (Method method : type.getMethods()) {
+            if (method.getParameterCount() != 1
+                    || method.getParameterTypes()[0] != String.class
+                    || method.getReturnType() != void.class) {
+                continue;
+            }
+            if (candidate != null) {
+                // BasicIndexItem currently has one such setter (setUri). If a
+                // future host adds another, fail closed instead of mutating a
+                // different field.
+                throw new NoSuchMethodException(
+                        "multiple one-string setters: " + candidate + ", " + method);
+            }
+            candidate = method;
+        }
+        if (candidate == null) {
+            throw new NoSuchMethodException("URI setter not found in " + type.getName());
+        }
+        candidate.setAccessible(true);
+        return candidate;
     }
 
     private static Method findCardRouteMethod(Class<?> routerClass)
@@ -366,20 +813,33 @@ public final class ModernStoryEntryHooks {
 
     private static String invokeString(Object receiver, String methodName) {
         Object value = invokeNoArgs(receiver, methodName);
-        return value instanceof String ? (String) value : null;
+        if (value instanceof String) {
+            return (String) value;
+        }
+        return readString(receiver, methodName);
     }
 
     private static long invokeLong(Object receiver, String methodName) {
         Object value = invokeNoArgs(receiver, methodName);
-        return value instanceof Number ? ((Number) value).longValue() : 0L;
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        Object fieldValue = readField(receiver, methodName);
+        return fieldValue instanceof Number ? ((Number) fieldValue).longValue() : 0L;
     }
 
     private static long resolveCardAid(Object card, Uri cardUri, Uri explicitUri) {
         long aid = invokeLong(card, "getAid");
+        if (aid <= 0) {
+            aid = invokeLong(card, "aid");
+        }
         if (aid > 0) {
             return aid;
         }
         Object args = invokeNoArgs(card, "getArgs");
+        if (args == null) {
+            args = readField(card, "args");
+        }
         aid = invokeLong(args, "a");
         if (aid > 0) {
             return aid;
@@ -388,14 +848,45 @@ public final class ModernStoryEntryHooks {
         if (aid > 0) {
             return aid;
         }
+        aid = invokeLong(args, "aid");
+        if (aid > 0) {
+            return aid;
+        }
+        aid = numericId(readString(card, "param"));
+        if (aid > 0) {
+            return aid;
+        }
         long fromUri = numericId(cardUri == null ? null : cardUri.getLastPathSegment());
         return fromUri > 0 ? fromUri
                 : numericId(explicitUri == null ? null : explicitUri.getLastPathSegment());
     }
 
+    private static long resolveRouteAid(Uri source, Map<?, ?> params) {
+        long aid = 0L;
+        if (source != null) {
+            aid = numericId(source.getQueryParameter("aid"));
+            if (aid <= 0) {
+                aid = numericId(source.getQueryParameter("avid"));
+            }
+            if (aid <= 0) {
+                aid = numericId(source.getLastPathSegment());
+            }
+        }
+        if (aid > 0 || params == null) {
+            return aid;
+        }
+        Object storyItem = params.get("story_item");
+        if (storyItem == null) {
+            return 0L;
+        }
+        Matcher matcher = JSON_AID.matcher(String.valueOf(storyItem));
+        return matcher.find() ? numericId(matcher.group(1)) : 0L;
+    }
+
     private static boolean isVerticalCard(Object card, Uri... candidateUris) {
-        String goTo = invokeString(card, "k");
-        String cardGoTo = invokeString(card, "getCardGoto");
+        String goTo = firstString(invokeString(card, "k"), readString(card, "goTo"));
+        String cardGoTo = firstString(
+                invokeString(card, "getCardGoto"), readString(card, "cardGoto"));
         if (VERTICAL_AV.equals(goTo) || VERTICAL_AV.equals(cardGoTo)) {
             return true;
         }
@@ -464,6 +955,34 @@ public final class ModernStoryEntryHooks {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static Object readField(Object receiver, String fieldName) {
+        if (receiver == null || fieldName == null || fieldName.isEmpty()) {
+            return null;
+        }
+        Class<?> owner = receiver.getClass();
+        while (owner != null) {
+            try {
+                Field field = owner.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                return field.get(receiver);
+            } catch (NoSuchFieldException ignored) {
+                owner = owner.getSuperclass();
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static String readString(Object receiver, String fieldName) {
+        Object value = readField(receiver, fieldName);
+        return value instanceof String ? (String) value : null;
+    }
+
+    private static String firstString(String first, String second) {
+        return first != null && !first.isEmpty() ? first : second;
     }
 
     private static long numericId(String value) {

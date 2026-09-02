@@ -120,8 +120,10 @@ public final class IpLocationHooks {
                 "kntr.base.moss.MossInterceptor$e");
         Class<?> requestClass = module.load(classLoader,
                 "kntr.base.moss.ignet.impl.grpc.c");
-        Class<?> descriptorClass = module.load(classLoader,
-                module.hostVersion().isModern630OrNewer() ? "jp1.g" : "zp1.g");
+        Class<?> descriptorClass = module.hostVersion().isModern640OrNewer()
+                ? module.load(classLoader, "Zq1.g")
+                : module.load(classLoader,
+                        module.hostVersion().isModern630OrNewer() ? "jp1.g" : "zp1.g");
         Field requestDescriptor = module.declaredField(eventClass, "b");
         Field serviceName = module.declaredField(descriptorClass, "b");
         Field methodName = module.declaredField(descriptorClass, "c");
@@ -462,12 +464,30 @@ public final class IpLocationHooks {
      * only the identity fields for the two read-only endpoints we support.
      */
     private void installModernRestIdentity() throws Throwable {
+        if (!module.hostVersion().isModern640OrNewer()) {
+            installPre640ModernRestIdentity();
+            return;
+        }
+        Class<?> libBiliClass = module.load(classLoader,
+                "com.bilibili.nativelibrary.LibBili");
+        Method domesticAppKey = module.declaredMethod(libBiliClass, "f", String.class);
+        int installed = 0;
+        installed += installModernCommonParamHook(
+                "com.bilibili.app.comm.list.common.api.e", "profile REST", domesticAppKey);
+        installed += installModernCommonParamHook(
+                "com.bilibili.common.hilowebview.http.j", "Hilo profile REST", domesticAppKey);
+        if (installed == 0) {
+            throw new NoSuchMethodException("6.4 REST addCommonParam interceptors unavailable");
+        }
+        module.info("6.4 REST identity hooks installed: count=" + installed);
+    }
+
+    private void installPre640ModernRestIdentity() throws Throwable {
         Class<?> interceptorClass = module.load(classLoader,
                 module.hostVersion().isModern630OrNewer() ? "XA0.a" : "lC0.a");
         Class<?> requestClass = module.load(classLoader, "okhttp3.z");
         Class<?> libBiliClass = module.load(classLoader,
                 "com.bilibili.nativelibrary.LibBili");
-
         Method intercept = module.declaredMethod(interceptorClass, "intercept", requestClass);
         Method addCommonParam = module.declaredMethod(
                 interceptorClass, "addCommonParam", Map.class);
@@ -519,6 +539,50 @@ public final class IpLocationHooks {
                     + " build=" + parameters.get("build"));
             return result;
         });
+    }
+
+    private int installModernCommonParamHook(
+            String className, String label, Method domesticAppKey) throws Throwable {
+        Class<?> interceptorClass;
+        try {
+            interceptorClass = module.load(classLoader, className);
+        } catch (ClassNotFoundException missing) {
+            module.debug("6.4 REST interceptor absent: " + className);
+            return 0;
+        }
+        Method addCommonParam;
+        try {
+            addCommonParam = module.declaredMethod(interceptorClass,
+                    "addCommonParam", Map.class);
+        } catch (NoSuchMethodException missing) {
+            module.debug("6.4 REST interceptor has no addCommonParam: " + className);
+            return 0;
+        }
+        module.deoptimizeFeatureMethod(addCommonParam);
+        module.addHook("6.4 " + label + " identity", addCommonParam, hookChain -> {
+            Object result = hookChain.proceed();
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isIpLocationEnabled()) {
+                return result;
+            }
+            Object value = hookChain.getArg(0);
+            if (!(value instanceof Map)) {
+                return result;
+            }
+            @SuppressWarnings("unchecked")
+            Map<Object, Object> parameters = (Map<Object, Object>) value;
+            if (!parameters.containsKey("vmid")) {
+                return result;
+            }
+            String original = String.valueOf(parameters.get("mobi_app"));
+            parameters.put("mobi_app", PROFILE_MOBI_APP);
+            parameters.put("platform", "android");
+            parameters.put("appkey", module.invoke(domesticAppKey, null, PROFILE_MOBI_APP));
+            module.debug("6.4 profile REST identity rewritten: interceptor=" + className
+                    + " vmid=" + parameters.get("vmid") + " oldMobiApp=" + original);
+            return result;
+        });
+        return 1;
     }
 
     private void installModernCommentBinding() throws Throwable {

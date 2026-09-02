@@ -1,5 +1,6 @@
 package com.xjw.bilifix.in.feature.live;
 
+import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
 
 import org.json.JSONArray;
@@ -35,6 +36,7 @@ public final class LiveEntranceHooks {
 
     private final HookApi module;
     private final ClassLoader classLoader;
+    private final DexSymbolResolver symbolResolver;
     private final android.os.Handler mainHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
     private final AtomicBoolean portalRefreshRunning = new AtomicBoolean(false);
@@ -42,9 +44,11 @@ public final class LiveEntranceHooks {
     private volatile long portalFetchedAt;
     private volatile WeakReference<Object> lastFollowingViewModel = new WeakReference<>(null);
 
-    public LiveEntranceHooks(HookApi module, ClassLoader classLoader) {
+    public LiveEntranceHooks(
+            HookApi module, ClassLoader classLoader, DexSymbolResolver symbolResolver) {
         this.module = module;
         this.classLoader = classLoader;
+        this.symbolResolver = symbolResolver;
     }
 
     public void install() {
@@ -56,14 +60,7 @@ public final class LiveEntranceHooks {
     private void installFollowingCoordinatorHook() throws Throwable {
         Class<?> viewModel = module.load(classLoader,
                 "com.bilibili.bplus.followinglist.home.synthesis.vm.SynthesisTabViewModel");
-        Method buildMethod;
-        if (module.hostVersion().isModern630OrNewer()) {
-            buildMethod = module.declaredMethod(viewModel, "M0",
-                    module.load(classLoader, "wj.d"));
-        } else {
-            buildMethod = module.declaredMethod(viewModel, "L3",
-                    module.load(classLoader, "com.bilibili.app.comm.list.common.data.d"));
-        }
+        Method buildMethod = findFollowingBuildMethod(viewModel);
         module.deoptimizeFeatureMethod(buildMethod);
         module.addHook("following live coordinator", buildMethod, chain -> {
             lastFollowingViewModel = new WeakReference<>(chain.getThisObject());
@@ -73,17 +70,76 @@ public final class LiveEntranceHooks {
             }
             return chain.proceed();
         });
-        module.info("following live coordinator resolved: method=" + buildMethod);
+        module.info("following live coordinator resolved structurally: method=" + buildMethod);
+    }
+
+    private static Method findFollowingBuildMethod(Class<?> viewModel)
+            throws NoSuchMethodException {
+        Method candidate = null;
+        int candidateScore = Integer.MIN_VALUE;
+        boolean tie = false;
+        for (Method method : viewModel.getDeclaredMethods()) {
+            if (method.getParameterCount() != 1
+                    || !java.util.LinkedList.class.isAssignableFrom(method.getReturnType())
+                    || java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                continue;
+            }
+            String generic = method.getGenericParameterTypes()[0].getTypeName();
+            int score = generic.contains("DynAllReply") ? 20 : 0;
+            if (score > candidateScore) {
+                candidate = method;
+                candidateScore = score;
+                tie = false;
+            } else if (score == candidateScore) {
+                tie = true;
+            }
+        }
+        if (candidate == null || tie) {
+            throw new NoSuchMethodException("following ViewModel list builder not found");
+        }
+        candidate.setAccessible(true);
+        return candidate;
     }
 
     private void installFollowingModelRestoreHook() throws Throwable {
         Class<?> upListClass = module.load(classLoader,
                 "com.bapis.bilibili.app.dynamic.v2.CardVideoUpList");
-        Class<?> modelClass = module.load(classLoader,
-                module.hostVersion().isModern630OrNewer()
-                        ? "C40.h3"
-                        : "com.bilibili.bplus.followinglist.model.ModuleVideoUpList");
-        Constructor<?> constructor = modelClass.getConstructor(upListClass, boolean.class);
+        Class<?> modelClass;
+        Constructor<?> constructor;
+        try {
+            if (module.hostVersion().isModern640OrNewer()) {
+                modelClass = module.load(classLoader, "J40.Y2");
+            } else if (module.hostVersion().isModern630OrNewer()) {
+                modelClass = module.load(classLoader, "C40.h3");
+            } else {
+                modelClass = module.load(classLoader,
+                        "com.bilibili.bplus.followinglist.model.ModuleVideoUpList");
+            }
+            constructor = modelClass.getConstructor(upListClass, boolean.class);
+        } catch (Throwable exactSymbolsUnavailable) {
+            modelClass = symbolResolver == null
+                    ? null : symbolResolver.resolveFollowingLiveModelClass(upListClass);
+            if (modelClass == null) {
+                throw exactSymbolsUnavailable;
+            }
+            constructor = null;
+            for (Constructor<?> candidate : modelClass.getDeclaredConstructors()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (parameters.length == 2 && parameters[0] == upListClass
+                        && parameters[1] == boolean.class) {
+                    candidate.setAccessible(true);
+                    constructor = candidate;
+                    break;
+                }
+            }
+            if (constructor == null) {
+                throw new NoSuchMethodException(
+                        "adaptive following live model constructor missing: "
+                                + modelClass.getName());
+            }
+            module.info("following live model adaptive fallback active: class="
+                    + modelClass.getName());
+        }
         module.addHook("following live model restore", constructor, chain -> {
             module.ensureFeatureSettings(currentApplication());
             if (!module.isModernLiveEnabled()) {
@@ -98,7 +154,8 @@ public final class LiveEntranceHooks {
             args[0] = patched;
             return chain.proceed(args);
         });
-        module.info("following live model restore resolved: constructor=" + constructor);
+        module.info("following live model restore resolved structurally: constructor="
+                + constructor);
     }
 
     private Object patchFollowingUpList(Object original) {
@@ -286,11 +343,22 @@ public final class LiveEntranceHooks {
 
     private void refreshFollowingViewModel() {
         Object viewModel = lastFollowingViewModel.get();
-        if (viewModel == null || !module.hostVersion().isModern630OrNewer()) {
+        if (viewModel == null) {
             return;
         }
         try {
-            Method refresh = viewModel.getClass().getMethod("J0", boolean.class);
+            Method refresh = null;
+            for (Method method : viewModel.getClass().getMethods()) {
+                if (method.getParameterCount() == 1
+                        && method.getParameterTypes()[0] == boolean.class
+                        && ("H0".equals(method.getName()) || "J0".equals(method.getName()))) {
+                    refresh = method;
+                    break;
+                }
+            }
+            if (refresh == null) {
+                throw new NoSuchMethodException("following ViewModel refresh method not found");
+            }
             refresh.setAccessible(true);
             refresh.invoke(viewModel, true);
             module.info("following live view model refreshed after portal update");

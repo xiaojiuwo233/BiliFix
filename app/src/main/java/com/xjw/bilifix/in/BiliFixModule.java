@@ -125,8 +125,8 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 Modern626FeatureHooks hooks = modernHooks(classLoader);
                 hooks.installEarly();
                 hooks.installReady();
-                new ModernStoryEntryHooks(this, classLoader).install();
-                new LiveEntranceHooks(this, classLoader).install();
+                new ModernStoryEntryHooks(this, classLoader, dexSymbolResolver).install();
+                new LiveEntranceHooks(this, classLoader, dexSymbolResolver).install();
                 new IpLocationHooks(this, classLoader).installModern626();
             } else {
                 new IpLocationHooks(this, classLoader).installModern626();

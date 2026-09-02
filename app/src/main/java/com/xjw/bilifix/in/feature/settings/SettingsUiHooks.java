@@ -497,7 +497,7 @@ final class SettingsUiHooks {
         try {
             new AlertDialog.Builder(context)
                     .setTitle("兼容性提示")
-                    .setMessage("你使用的B站版本与BiliFix兼容版本不符，可能会出现问题，请使用「6.2.6」或「6.3.0」获得最佳体验")
+                    .setMessage("你使用的B站版本与BiliFix兼容版本不符，可能会出现问题，请使用「6.2.6 ～ 6.4.0」获得最佳体验")
                     .setPositiveButton("知道了", null)
                     .show();
             module.warn("compatibility warning shown: host=" + hostVersion);
