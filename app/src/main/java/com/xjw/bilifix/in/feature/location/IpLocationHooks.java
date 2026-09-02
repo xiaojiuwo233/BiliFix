@@ -105,9 +105,12 @@ public final class IpLocationHooks {
     private final Set<String> observedTabParams =
             Collections.synchronizedSet(new HashSet<>());
     private final AtomicBoolean diagnosticsInstalled = new AtomicBoolean(false);
-    private final Map<ScopeKind, Boolean> probeSignedIn = new EnumMap<>(ScopeKind.class);
-    private final Map<ScopeKind, Long> probeLastSignedInUptime = new EnumMap<>(ScopeKind.class);
+    private final Map<ScopeKind, Boolean> probeLocationsAvailable =
+            new EnumMap<>(ScopeKind.class);
+    private final Map<ScopeKind, Long> probeLastAvailableUptime =
+            new EnumMap<>(ScopeKind.class);
     private final long installedUptimeMs = SystemClock.elapsedRealtime();
+    private volatile CommentAuthCoordinator commentAuth;
 
     public IpLocationHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
@@ -223,8 +226,29 @@ public final class IpLocationHooks {
     }
 
     private void installMossIdentityHooks() throws Throwable {
-        ProtoIdentityRewriter metadata = new ProtoIdentityRewriter(
+        CommentAuthCoordinator resolvedAuth = null;
+        try {
+            resolvedAuth = new CommentAuthCoordinator(
+                    module, classLoader, this::currentCommentSource);
+        } catch (Throwable throwable) {
+            module.error("IP location comment authentication unavailable", throwable);
+        }
+        commentAuth = resolvedAuth;
+        CommentAuthCoordinator authForMetadata = resolvedAuth;
+
+        ProtoRewriter metadataIdentity = new ProtoIdentityRewriter(
                 module, classLoader, "com.bapis.bilibili.metadata.Metadata", false);
+        ProtoRewriter metadata = authForMetadata == null
+                ? metadataIdentity
+                : composeRewriters(metadataIdentity, source -> {
+                    CommentAuthCoordinator.MetadataRewrite rewrite =
+                            authForMetadata.rewriteMetadata(source);
+                    return new ProtoRewriteResult(
+                            rewrite.bytes,
+                            rewrite.originalState,
+                            rewrite.rewrittenState,
+                            rewrite.changed);
+                });
         ProtoIdentityRewriter device = new ProtoIdentityRewriter(
                 module, classLoader, "com.bapis.bilibili.metadata.device.Device", true);
         ProtoFawkesCommentReadRewriter fawkes = new ProtoFawkesCommentReadRewriter(
@@ -241,6 +265,11 @@ public final class IpLocationHooks {
         installProtoRewriteHook("IP location Moss metadata", createMetadata, metadata);
         installProtoRewriteHook("IP location Moss device", createDevice, device);
         installProtoRewriteHook("IP location Moss Fawkes", createFawkes, fawkes);
+        if (resolvedAuth != null) {
+            CommentAuthCoordinator auth = resolvedAuth;
+            installMossSubgroup("comment authentication diagnostics and repair",
+                    () -> auth.install(metadataFactoryClass));
+        }
 
         Class<?> methodDescriptorClass = module.load(classLoader, "io.grpc.MethodDescriptor");
         Class<?> generatedMessageClass = module.load(classLoader,
@@ -277,8 +306,8 @@ public final class IpLocationHooks {
     }
 
     private void installMossGrpcHeaderRewrites(
-            ProtoIdentityRewriter metadata, ProtoIdentityRewriter device,
-            ProtoFawkesCommentReadRewriter fawkes) throws Throwable {
+            ProtoRewriter metadata, ProtoRewriter device,
+            ProtoRewriter fawkes) throws Throwable {
         Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
         Class<?> headerKeyClass = module.load(classLoader, "io.grpc.n0$h");
         Method headerGet = module.declaredMethod(headersClass, "g", headerKeyClass);
@@ -365,8 +394,8 @@ public final class IpLocationHooks {
     }
 
     private void installEncodedMossHeaderHooks(
-            Class<?> metadataFactoryClass, ProtoIdentityRewriter metadata,
-            ProtoIdentityRewriter device, ProtoFawkesCommentReadRewriter fawkes) throws Throwable {
+            Class<?> metadataFactoryClass, ProtoRewriter metadata,
+            ProtoRewriter device, ProtoRewriter fawkes) throws Throwable {
         Method createEncodedMetadata = module.declaredMethod(metadataFactoryClass, "f");
         Method createEncodedDevice = module.declaredMethod(metadataFactoryClass, "c");
         Method createEncodedFawkes = module.declaredMethod(metadataFactoryClass, "b");
@@ -787,33 +816,37 @@ public final class IpLocationHooks {
         return dropped;
     }
 
-    private void reportAccountState(ScopeKind kind, boolean signedIn, String detail) {
+    private void reportAccountState(
+            ScopeKind kind, boolean locationsAvailable, String detail) {
         long uptime = SystemClock.elapsedRealtime() - installedUptimeMs;
         Boolean previous;
-        Long lastSignedIn;
-        synchronized (probeSignedIn) {
-            previous = probeSignedIn.put(kind, signedIn);
-            lastSignedIn = probeLastSignedInUptime.get(kind);
-            if (signedIn) {
-                probeLastSignedInUptime.put(kind, uptime);
+        Long lastAvailable;
+        synchronized (probeLocationsAvailable) {
+            previous = probeLocationsAvailable.put(kind, locationsAvailable);
+            lastAvailable = probeLastAvailableUptime.get(kind);
+            if (locationsAvailable) {
+                probeLastAvailableUptime.put(kind, uptime);
             }
         }
-        if (previous != null && previous == signedIn) {
+        if (previous != null && previous == locationsAvailable) {
             return;
         }
         String message = "IP location account state "
-                + (previous == null ? "observed" : signedIn ? "recovered" : "DEGRADED")
+                + (previous == null ? "observed"
+                : locationsAvailable ? "recovered" : "DEGRADED")
                 + ": probe=" + kind.logName
-                + " signedIn=" + signedIn
+                + " locationsAvailable=" + locationsAvailable
                 + " " + detail
                 + " identity=" + (kind == ScopeKind.PROFILE_REST
                         ? profileIdentity() : commentIdentity(true))
                 + " appkey=" + appkeyPolicy(kind)
                 + " uptimeMs=" + uptime
-                + " sinceLastSignedInMs="
-                + (lastSignedIn == null ? -1 : uptime - lastSignedIn)
-                + " transportRepairs=" + transportRepairLogCount.get();
-        if (signedIn) {
+                + " sinceLastAvailableMs="
+                + (lastAvailable == null ? -1 : uptime - lastAvailable)
+                + " transportRepairs=" + transportRepairLogCount.get()
+                + " authRepairs="
+                + (commentAuth == null ? 0 : commentAuth.repairCount());
+        if (locationsAvailable) {
             module.info(message);
         } else {
             module.warn(message);
@@ -1037,6 +1070,28 @@ public final class IpLocationHooks {
                 requestScope.set(previous);
             }
         }
+    }
+
+    private String currentCommentSource() {
+        RequestScope scope = requestScope.get();
+        if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
+                || !module.isIpLocationEnabled()) {
+            return null;
+        }
+        return scope.source;
+    }
+
+    private static ProtoRewriter composeRewriters(
+            ProtoRewriter first, ProtoRewriter second) {
+        return source -> {
+            ProtoRewriteResult firstResult = first.rewrite(source);
+            ProtoRewriteResult secondResult = second.rewrite(firstResult.bytes);
+            return new ProtoRewriteResult(
+                    secondResult.bytes,
+                    firstResult.originalIdentity + "/" + secondResult.originalIdentity,
+                    firstResult.rewrittenIdentity + "/" + secondResult.rewrittenIdentity,
+                    firstResult.changed || secondResult.changed);
+        };
     }
 
     private void logTargetRequest(ScopeKind kind, String source) {
