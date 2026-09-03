@@ -470,10 +470,14 @@ public final class ModernStoryEntryHooks {
         boolean modern640 = module.hostVersion().isModern640OrNewer();
         String availabilityMethod = modern640 ? "c0"
                 : module.hostVersion().isModern630OrNewer() ? "C" : "r0";
-        String verticalSwitchMethod = modern640 ? "o0"
+        String verticalSwitchMethod = module.hostVersion().isExact640Patch() ? "p0"
+                : modern640 ? "o0"
                 : module.hostVersion().isModern630OrNewer() ? "P" : "C0";
-        String iconMethod = modern640 ? "A0"
+        String iconMethod = module.hostVersion().isExact640Patch() ? "B0"
+                : modern640 ? "A0"
                 : module.hostVersion().isModern630OrNewer() ? "b0" : "N0";
+        boolean requireSemanticResolution = module.hostVersion().isExact640Patch()
+                || !module.hostVersion().isSupportedModernHost();
         int installedDelegates = 0;
         for (String className : PLAYER_ACTION_DELEGATES) {
             try {
@@ -481,23 +485,39 @@ public final class ModernStoryEntryHooks {
                 Method availability;
                 Method verticalSwitch;
                 Method icon;
-                try {
-                    availability = module.declaredMethod(
-                            delegateClass, availabilityMethod);
-                    verticalSwitch = module.declaredMethod(
-                            delegateClass, verticalSwitchMethod);
-                    icon = module.declaredMethod(delegateClass, iconMethod);
-                } catch (NoSuchMethodException renamed) {
-                    DexSymbolResolver.StoryPlayerSymbols adaptive = symbolResolver == null
-                            ? null : symbolResolver.resolveStoryPlayerSymbols(delegateClass);
-                    if (adaptive == null) {
-                        throw renamed;
-                    }
+                DexSymbolResolver.StoryPlayerSymbols adaptive =
+                        requireSemanticResolution && symbolResolver != null
+                                ? symbolResolver.resolveStoryPlayerSymbols(delegateClass)
+                                : null;
+                if (adaptive != null) {
                     availability = adaptive.availability();
                     verticalSwitch = adaptive.verticalSwitch();
                     icon = adaptive.icon();
-                    module.info("modern player Story methods adaptive fallback: class="
+                    module.info("modern player Story methods resolved semantically: class="
                             + className + " evidence=" + adaptive.evidence());
+                } else if (requireSemanticResolution
+                        && !module.hostVersion().isSupportedModernHost()) {
+                    throw new NoSuchMethodException(
+                            "unknown host Story methods failed semantic resolution");
+                } else {
+                    try {
+                        availability = module.declaredMethod(
+                                delegateClass, availabilityMethod);
+                        verticalSwitch = module.declaredMethod(
+                                delegateClass, verticalSwitchMethod);
+                        icon = module.declaredMethod(delegateClass, iconMethod);
+                    } catch (NoSuchMethodException renamed) {
+                        adaptive = symbolResolver == null ? null
+                                : symbolResolver.resolveStoryPlayerSymbols(delegateClass);
+                        if (adaptive == null) {
+                            throw renamed;
+                        }
+                        availability = adaptive.availability();
+                        verticalSwitch = adaptive.verticalSwitch();
+                        icon = adaptive.icon();
+                        module.info("modern player Story methods adaptive fallback: class="
+                                + className + " evidence=" + adaptive.evidence());
+                    }
                 }
                 if (availability.getReturnType() != boolean.class
                         || verticalSwitch.getReturnType() != boolean.class
@@ -505,7 +525,7 @@ public final class ModernStoryEntryHooks {
                     throw new NoSuchMethodException("Story delegate signature mismatch: "
                             + availability + ", " + verticalSwitch + ", " + icon);
                 }
-                module.addHook(className + "." + availabilityMethod
+                module.addHook(className + "." + availability.getName()
                                 + " restore Story availability",
                         availability, chain -> {
                             Object result = chain.proceed();
@@ -520,7 +540,7 @@ public final class ModernStoryEntryHooks {
                             }
                             return true;
                         });
-                module.addHook(className + "." + verticalSwitchMethod
+                module.addHook(className + "." + verticalSwitch.getName()
                                 + " restore vertical-video Story switch",
                         verticalSwitch, chain -> {
                             Object result = chain.proceed();
@@ -536,7 +556,7 @@ public final class ModernStoryEntryHooks {
                             }
                             return true;
                         });
-                module.addHook(className + "." + iconMethod
+                module.addHook(className + "." + icon.getName()
                                 + " provide official Story icon",
                         icon, chain -> {
                             Object result = chain.proceed();

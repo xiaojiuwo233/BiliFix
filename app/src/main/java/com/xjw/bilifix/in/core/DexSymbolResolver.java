@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import org.luckypray.dexkit.DexKitBridge;
 import org.luckypray.dexkit.query.FindClass;
 import org.luckypray.dexkit.query.FindMethod;
+import org.luckypray.dexkit.query.enums.StringMatchType;
 import org.luckypray.dexkit.query.matchers.ClassMatcher;
 import org.luckypray.dexkit.query.matchers.MethodMatcher;
 import org.luckypray.dexkit.result.ClassData;
@@ -303,7 +304,7 @@ public final class DexSymbolResolver implements AutoCloseable {
         try {
             DexKitBridge current = requireBridge();
             ClassDataList candidates = current.findClass(FindClass.create()
-                    .matcher(ClassMatcher.create().usingEqStrings("showLiveNum=")));
+                    .matcher(ClassMatcher.create().usingStrings("showLiveNum=")));
             Class<?> match = null;
             for (ClassData candidate : candidates) {
                 Class<?> type;
@@ -376,6 +377,52 @@ public final class DexSymbolResolver implements AutoCloseable {
             return new PegasusHolderRouteSymbols(match, holderClass);
         } catch (Throwable throwable) {
             module.warn("DexKit Pegasus holder route resolution failed: " + throwable);
+            return null;
+        }
+    }
+
+    public synchronized Method resolveComposeImMenuDispatchMethod() {
+        try {
+            DexKitBridge current = requireBridge();
+            MethodDataList candidates = current.findMethod(FindMethod.create()
+                    .matcher(MethodMatcher.create()
+                            .declaredClass(ClassMatcher.create().className(
+                                    "kntr.app.im.chat.ui.utils.",
+                                    StringMatchType.StartsWith, false))
+                            .paramCount(4)
+                            .returnType("java.lang.Object")));
+            Method match = null;
+            for (MethodData candidate : candidates) {
+                List<String> parameters = candidate.getParamTypeNames();
+                if (parameters.size() != 4
+                        || !parameters.get(0).startsWith(
+                        "com.bapis.bilibili.app.im.v1.")
+                        || !"kntr.app.im.chat.ui.a".equals(parameters.get(2))
+                        || !parameters.get(3).contains("SuspendLambda")) {
+                    continue;
+                }
+                Method method = candidate.getMethodInstance(classLoader);
+                if (!Modifier.isStatic(method.getModifiers())
+                        || method.getReturnType() != Object.class) {
+                    continue;
+                }
+                if (match != null && !match.equals(method)) {
+                    module.warn("DexKit Compose IM dispatcher ambiguous: first="
+                            + match + " next=" + method);
+                    return null;
+                }
+                match = method;
+            }
+            if (match == null) {
+                module.warn("DexKit Compose IM dispatcher not found: candidates="
+                        + candidates.size());
+                return null;
+            }
+            match.setAccessible(true);
+            module.info("DexKit Compose IM dispatcher resolved: " + match);
+            return match;
+        } catch (Throwable throwable) {
+            module.warn("DexKit Compose IM dispatcher resolution failed: " + throwable);
             return null;
         }
     }

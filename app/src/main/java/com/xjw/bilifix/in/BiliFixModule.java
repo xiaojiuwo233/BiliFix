@@ -114,9 +114,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             info("unsupported pre-6.x host: only BiliFix incompatibility settings entry installed");
         }
         if (mainProcess && hostVersion.isModern626OrNewer()) {
+            ensureDexSymbolResolver(param, classLoader);
             new CommentFreeCopyHooks(this, classLoader).install();
             new VideoDescriptionFreeCopyHooks(this, classLoader).install();
-            new DirectMessageFreeCopyHooks(this, classLoader).install();
+            new DirectMessageFreeCopyHooks(
+                    this, classLoader, dexSymbolResolver).install();
         }
         if (hostVersion.isModern626OrNewer()) {
             if (mainProcess) {

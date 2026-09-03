@@ -10,6 +10,7 @@ import android.os.Looper;
 import android.text.TextUtils;
 import android.widget.TextView;
 
+import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
 
 import org.json.JSONArray;
@@ -29,27 +30,35 @@ public final class DirectMessageFreeCopyHooks {
             "com.bilibili.bplus.im.conversation.";
     private static final String BASE_TYPED_MESSAGE =
             "com.bilibili.bplus.im.business.model.BaseTypedMessage";
-    private static final String COMPOSE_UTILS =
-            "kntr.app.im.chat.ui.utils.g";
-    private static final String COMPOSE_COPY_ITEM =
-            "com.bapis.bilibili.app.im.v1.z1$e";
-    private static final String COMPOSE_COPY_VALUE =
-            "com.bapis.bilibili.app.im.v1.A1";
+    private static final String COMPOSE_UTILS_PACKAGE =
+            "kntr.app.im.chat.ui.utils.";
+    private static final String[] COMPOSE_UTILS_FAST_PATHS = {
+            "f", "g", "e", "h"
+    };
 
     private final HookApi module;
     private final ClassLoader classLoader;
+    private final DexSymbolResolver symbolResolver;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AtomicInteger clickLogCount = new AtomicInteger();
     private final AtomicInteger composeClickLogCount = new AtomicInteger();
     private final AtomicInteger dialogLogCount = new AtomicInteger();
 
-    public DirectMessageFreeCopyHooks(HookApi module, ClassLoader classLoader) {
+    public DirectMessageFreeCopyHooks(
+            HookApi module,
+            ClassLoader classLoader,
+            DexSymbolResolver symbolResolver) {
         this.module = module;
         this.classLoader = classLoader;
+        this.symbolResolver = symbolResolver;
     }
 
     public void install() {
-        installLegacyConversationHook();
+        if (module.hostVersion().isModern640OrNewer()) {
+            module.debug("direct-message legacy callback skipped on Compose-only 6.4+");
+        } else {
+            installLegacyConversationHook();
+        }
         installComposeConversationHook();
     }
 
@@ -127,25 +136,24 @@ public final class DirectMessageFreeCopyHooks {
 
     private void installComposeConversationHook() {
         try {
-            Class<?> utilsClass = module.load(classLoader, COMPOSE_UTILS);
-            Class<?> copyItemClass = module.load(classLoader, COMPOSE_COPY_ITEM);
-            Class<?> copyValueClass = module.load(classLoader, COMPOSE_COPY_VALUE);
-            Method dispatch = findComposeDispatchMethod(utilsClass);
-            Method getContent = copyValueClass.getDeclaredMethod("getContent");
-            getContent.setAccessible(true);
+            Method dispatch = resolveComposeDispatchMethod();
+            ComposeCopySymbols copySymbols = resolveComposeCopySymbols(dispatch);
 
             module.deoptimizeFeatureMethod(dispatch);
             module.info("direct-message Compose symbols resolved: dispatch=" + dispatch
-                    + " copyItem=" + copyItemClass.getName()
-                    + " copyValue=" + copyValueClass.getName());
+                    + " menu=" + dispatch.getParameterTypes()[0].getName()
+                    + " copyItem=" + copySymbols.copyItemClass().getName()
+                    + " copyValue="
+                    + copySymbols.getValue().getReturnType().getName());
             module.addHook("direct-message Compose COPY dispatch", dispatch, chain -> {
                 Object menuItem = chain.getArg(0);
-                if (menuItem == null || !copyItemClass.isInstance(extractMenuItem(menuItem))) {
+                Object item = menuItem == null ? null : extractMenuItem(menuItem);
+                if (item == null || !copySymbols.copyItemClass().isInstance(item)) {
                     return chain.proceed();
                 }
 
-                Object item = extractMenuItem(menuItem);
-                String text = extractComposeCopyText(item, getContent);
+                String text = extractComposeCopyText(
+                        item, copySymbols.getValue(), copySymbols.getContent());
                 int sequence = composeClickLogCount.incrementAndGet();
                 if (sequence <= 20 || sequence % 100 == 0) {
                     module.info("direct-message Compose COPY dispatched: enabled="
@@ -179,6 +187,34 @@ public final class DirectMessageFreeCopyHooks {
         }
     }
 
+    private Method resolveComposeDispatchMethod() throws NoSuchMethodException {
+        Throwable lastFailure = null;
+        for (String suffix : COMPOSE_UTILS_FAST_PATHS) {
+            try {
+                Class<?> utilsClass = module.load(
+                        classLoader, COMPOSE_UTILS_PACKAGE + suffix);
+                Method method = findComposeDispatchMethod(utilsClass);
+                module.info("direct-message Compose dispatcher fast path: " + method);
+                return method;
+            } catch (Throwable throwable) {
+                lastFailure = throwable;
+            }
+        }
+        Method adaptive = symbolResolver == null
+                ? null : symbolResolver.resolveComposeImMenuDispatchMethod();
+        if (adaptive != null) {
+            module.info("direct-message Compose dispatcher adaptive fallback: "
+                    + adaptive);
+            return adaptive;
+        }
+        NoSuchMethodException failure = new NoSuchMethodException(
+                "Compose IM menu dispatcher not found by fast path or DexKit");
+        if (lastFailure != null) {
+            failure.initCause(lastFailure);
+        }
+        throw failure;
+    }
+
     private static Method findComposeDispatchMethod(Class<?> utilsClass)
             throws NoSuchMethodException {
         Method match = null;
@@ -186,8 +222,8 @@ public final class DirectMessageFreeCopyHooks {
             Class<?>[] parameters = method.getParameterTypes();
             if (!Modifier.isStatic(method.getModifiers())
                     || parameters.length != 4
-                    || !"com.bapis.bilibili.app.im.v1.C1".equals(parameters[0].getName())
-                    || !"Kl1.r".equals(parameters[1].getName())
+                    || !parameters[0].getName().startsWith(
+                    "com.bapis.bilibili.app.im.v1.")
                     || !"kntr.app.im.chat.ui.a".equals(parameters[2].getName())
                     || !"java.lang.Object".equals(method.getReturnType().getName())
                     || !parameters[3].getName().contains("SuspendLambda")) {
@@ -207,6 +243,55 @@ public final class DirectMessageFreeCopyHooks {
         return match;
     }
 
+    private static ComposeCopySymbols resolveComposeCopySymbols(Method dispatch)
+            throws NoSuchMethodException {
+        Class<?> menuClass = dispatch.getParameterTypes()[0];
+        Method menuContent = menuClass.getMethod("getContent");
+        Class<?> contentClass = menuContent.getReturnType();
+        Method getItem = contentClass.getMethod("getItem");
+        Class<?> itemInterface = getItem.getReturnType();
+
+        ComposeCopySymbols match = null;
+        for (Class<?> nested : contentClass.getDeclaredClasses()) {
+            if (!itemInterface.isAssignableFrom(nested)
+                    || nested.isInterface()
+                    || Modifier.isAbstract(nested.getModifiers())) {
+                continue;
+            }
+            Method getValue;
+            Method getContent;
+            try {
+                getValue = nested.getMethod("getValue");
+                if (getValue.getParameterCount() != 0
+                        || getValue.getReturnType() == void.class) {
+                    continue;
+                }
+                getContent = getValue.getReturnType().getMethod("getContent");
+                if (getContent.getParameterCount() != 0
+                        || getContent.getReturnType() != String.class) {
+                    continue;
+                }
+            } catch (NoSuchMethodException ignored) {
+                // Other sealed menu variants do not carry copyable text.
+                continue;
+            }
+            if (match != null) {
+                throw new NoSuchMethodException(
+                        "multiple Compose IM copy payload variants: "
+                                + match.copyItemClass().getName() + ", "
+                                + nested.getName());
+            }
+            getValue.setAccessible(true);
+            getContent.setAccessible(true);
+            match = new ComposeCopySymbols(nested, getValue, getContent);
+        }
+        if (match == null) {
+            throw new NoSuchMethodException(
+                    "Compose IM copy payload not found below " + contentClass.getName());
+        }
+        return match;
+    }
+
     private static Object extractMenuItem(Object menuWrapper) {
         try {
             Method getContent = menuWrapper.getClass().getMethod("getContent");
@@ -221,12 +306,12 @@ public final class DirectMessageFreeCopyHooks {
         }
     }
 
-    private static String extractComposeCopyText(Object copyItem, Method getContent)
+    private static String extractComposeCopyText(
+            Object copyItem, Method getValue, Method getContent)
             throws Throwable {
         if (copyItem == null) {
             return null;
         }
-        Method getValue = copyItem.getClass().getMethod("getValue");
         Object value = getValue.invoke(copyItem);
         Object content = value == null ? null : getContent.invoke(value);
         return content instanceof String ? ((String) content).trim() : null;
@@ -419,6 +504,12 @@ public final class DirectMessageFreeCopyHooks {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private record ComposeCopySymbols(
+            Class<?> copyItemClass,
+            Method getValue,
+            Method getContent) {
     }
 
     private static void addLine(List<String> lines, String value) {
