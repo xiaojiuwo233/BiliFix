@@ -5,7 +5,6 @@ import android.content.Context;
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -21,6 +20,8 @@ final class CommentAuthCoordinator {
     private final ScopeProvider scopeProvider;
     private final Method accountInstance;
     private final Method accountAccessKey;
+    private final Method accountExpiry;
+    private final Method accountMid;
     private final Method metadataParseFrom;
     private final Method metadataGetAccessKey;
     private final Method metadataToBuilder;
@@ -43,6 +44,8 @@ final class CommentAuthCoordinator {
         Class<?> accountClass = module.load(classLoader, "com.bilibili.lib.accounts.i");
         accountInstance = module.declaredMethod(accountClass, "i", Context.class);
         accountAccessKey = module.declaredMethod(accountClass, "j");
+        accountExpiry = module.declaredMethod(accountClass, "q");
+        accountMid = module.declaredMethod(accountClass, "x");
 
         Class<?> metadataClass = module.load(
                 classLoader, "com.bapis.bilibili.metadata.Metadata");
@@ -59,7 +62,6 @@ final class CommentAuthCoordinator {
 
     void install(Class<?> metadataFactoryClass) throws Throwable {
         installAuthorizationFactory(metadataFactoryClass);
-        installFinalGrpcHeaders();
         installAccountEvents();
     }
 
@@ -113,6 +115,7 @@ final class CommentAuthCoordinator {
                     String originalAccessKey = extractAuthorizationAccessKey(
                             originalAuthorization);
                     if (!isUsable(desiredAccessKey)
+                            || !isRepairableAuthorization(originalAuthorization)
                             || Objects.equals(originalAccessKey, desiredAccessKey)) {
                         return result;
                     }
@@ -126,56 +129,12 @@ final class CommentAuthCoordinator {
                 });
     }
 
-    private void installFinalGrpcHeaders() throws Throwable {
-        Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
-        Class<?> headerKeyClass = module.load(classLoader, "io.grpc.n0$h");
-        Method headerGet = module.declaredMethod(headersClass, "g", headerKeyClass);
-        Method headerDiscard = module.declaredMethod(headersClass, "e", headerKeyClass);
-        Method headerPut = module.declaredMethod(
-                headersClass, "o", headerKeyClass, Object.class);
-
-        Class<?> interceptorClass = module.load(classLoader, "of1.a");
-        Method populate = module.declaredMethod(interceptorClass, "c", headersClass);
-        Field metadataKeyField = module.declaredField(interceptorClass, "a");
-        Field authorizationKeyField = module.declaredField(interceptorClass, "b");
-        module.deoptimizeFeatureMethod(populate);
-
-        module.addHook("IP location Moss final authentication", populate, hookChain -> {
-            Object result = hookChain.proceed();
-            String source = scopeProvider.currentCommentSource();
-            if (source == null) {
-                return result;
-            }
-            Object headers = hookChain.getArg(0);
-            Object interceptor = hookChain.getThisObject();
-            if (headers == null || interceptor == null) {
-                return result;
-            }
-            try {
-                inspectAndRepairFinalHeaders(
-                        headers, interceptor, source,
-                        metadataKeyField, authorizationKeyField,
-                        headerGet, headerDiscard, headerPut);
-            } catch (Throwable throwable) {
-                module.error("IP location final authentication inspection failed: source="
-                        + source, throwable);
-            }
-            return result;
-        });
-    }
-
-    private void inspectAndRepairFinalHeaders(
-            Object headers, Object interceptor, String source,
-            Field metadataKeyField, Field authorizationKeyField,
-            Method headerGet, Method headerDiscard, Method headerPut) throws Throwable {
-        Object metadataKey = metadataKeyField.get(interceptor);
-        Object authorizationKey = authorizationKeyField.get(interceptor);
-        Object metadataValue = metadataKey == null
-                ? null : module.invoke(headerGet, headers, metadataKey);
-        String authorization = authorizationKey == null
-                ? null : stringValue(module.invoke(headerGet, headers, authorizationKey));
-        String metadataAccessKey = metadataValue instanceof byte[]
-                ? readMetadataAccessKey((byte[]) metadataValue) : null;
+    void inspectAndRepairFinalHeaders(String source, MossTransportHooks.Headers headers)
+            throws Throwable {
+        byte[] metadataValue = headers.binary("x-bili-metadata-bin");
+        String authorization = headers.ascii("authorization");
+        String metadataAccessKey = metadataValue == null
+                ? null : readMetadataAccessKey(metadataValue);
         String authorizationAccessKey = extractAuthorizationAccessKey(authorization);
         String accountKey = readCurrentAccessKey();
         String originalMetadataAccessKey = metadataAccessKey;
@@ -188,20 +147,19 @@ final class CommentAuthCoordinator {
         boolean metadataRepaired = false;
         boolean authorizationRepaired = false;
 
-        if (isUsable(accountKey) && metadataKey != null && metadataValue instanceof byte[]
+        if (isUsable(accountKey) && metadataValue != null
                 && !metadataMatches) {
-            MetadataRewrite rewrite = rewriteMetadata((byte[]) metadataValue, accountKey);
+            MetadataRewrite rewrite = rewriteMetadata(metadataValue, accountKey);
             if (rewrite.changed) {
-                module.invoke(headerDiscard, headers, metadataKey);
-                module.invoke(headerPut, headers, metadataKey, rewrite.bytes);
+                headers.binary("x-bili-metadata-bin", rewrite.bytes);
                 metadataAccessKey = accountKey;
                 metadataMatches = true;
                 metadataRepaired = true;
             }
         }
-        if (isUsable(accountKey) && authorizationKey != null && !authorizationMatches) {
-            module.invoke(headerDiscard, headers, authorizationKey);
-            module.invoke(headerPut, headers, authorizationKey, AUTH_PREFIX + accountKey);
+        if (isUsable(accountKey) && isRepairableAuthorization(authorization)
+                && !authorizationMatches) {
+            headers.ascii("authorization", AUTH_PREFIX + accountKey);
             authorizationAccessKey = accountKey;
             authorizationMatches = true;
             authorizationRepaired = true;
@@ -215,7 +173,8 @@ final class CommentAuthCoordinator {
                 originalAuthorizationAccessKey, originalMetadataAccessKey,
                 authorizationAccessKey, metadataAccessKey,
                 authorizationMatches, metadataMatches,
-                authorizationRepaired, metadataRepaired);
+                authorizationRepaired, metadataRepaired,
+                describeAccountChecks(headers));
     }
 
     private void installAccountEvents() throws Throwable {
@@ -255,14 +214,18 @@ final class CommentAuthCoordinator {
             String originalAuthorizationAccessKey, String originalMetadataAccessKey,
             String authorizationAccessKey, String metadataAccessKey,
             boolean authorizationMatches, boolean metadataMatches,
-            boolean authorizationRepaired, boolean metadataRepaired) {
+            boolean authorizationRepaired, boolean metadataRepaired, String accountChecks) {
         boolean repaired = authorizationRepaired || metadataRepaired;
         boolean healthy = isUsable(accountKey) && authorizationMatches && metadataMatches;
-        String state = "account=" + credentialSummary(accountKey)
+        boolean anonymous = !isUsable(accountKey) && !isUsable(authorizationAccessKey)
+                && !isUsable(metadataAccessKey) && !isUsable(originalAuthorization);
+        String transport = source.startsWith("okhttp-send ") ? "okhttp" : "grpc";
+        String state = "transport=" + transport + ";account=" + credentialSummary(accountKey)
                 + ";authorization=" + credentialSummary(authorizationAccessKey)
                 + ";metadata=" + credentialSummary(metadataAccessKey)
                 + ";authMatch=" + authorizationMatches
                 + ";metadataMatch=" + metadataMatches
+                + ";checks=" + accountChecks
                 + ";event=" + lastAccountEvent
                 + ";generation=" + accountEventGeneration.get();
         String previous = lastDiagnosticState.getAndSet(state);
@@ -274,6 +237,9 @@ final class CommentAuthCoordinator {
             return;
         }
         String message = "IP location comment authentication: source=" + source
+                + " status=" + (anonymous ? "ANONYMOUS"
+                        : healthy ? "CONSISTENT" : "MISMATCH")
+                + " " + accountChecks
                 + " account={" + credentialSummary(accountKey) + "}"
                 + " before={authorization=" + authorizationSummary(originalAuthorization)
                 + ",authorizationKey="
@@ -290,7 +256,7 @@ final class CommentAuthCoordinator {
                 + " generation=" + accountEventGeneration.get()
                 + " repairs=" + repairCount.get()
                 + " sample=" + sequence;
-        if (healthy && !repaired) {
+        if ((healthy || anonymous) && !repaired) {
             module.info(message);
         } else {
             module.warn(message);
@@ -307,6 +273,27 @@ final class CommentAuthCoordinator {
                 : stringValue(module.invoke(accountAccessKey, account));
     }
 
+    private String describeAccountChecks(MossTransportHooks.Headers headers) {
+        try {
+            Context context = HostApplication.get();
+            if (context == null) {
+                return "localExpiry=unknown routeMidMatches=unknown";
+            }
+            Object account = module.invoke(accountInstance, null, context);
+            long expiry = ((Number) module.invoke(accountExpiry, account)).longValue();
+            long mid = ((Number) module.invoke(accountMid, account)).longValue();
+            String routeMid = headers.ascii("x-bili-mid");
+            String expiryState = expiry <= 0 ? "unknown"
+                    : expiry <= System.currentTimeMillis() / 1000 ? "expired" : "future";
+            String routeState = !isUsable(routeMid) ? "absent"
+                    : mid <= 0 ? "unknown" : String.valueOf(routeMid.equals(String.valueOf(mid)));
+            // Local expiry and matching identifiers do not prove server-side authentication.
+            return "localExpiry=" + expiryState + " routeMidMatches=" + routeState;
+        } catch (Throwable ignored) {
+            return "localExpiry=unknown routeMidMatches=unknown";
+        }
+    }
+
     private String readMetadataAccessKey(byte[] source) throws Throwable {
         Object metadata = module.invoke(metadataParseFrom, null, (Object) source);
         return stringValue(module.invoke(metadataGetAccessKey, metadata));
@@ -320,12 +307,16 @@ final class CommentAuthCoordinator {
         return isUsable(value) ? value : null;
     }
 
+    private static boolean isRepairableAuthorization(String value) {
+        return !isUsable(value) || value.startsWith(AUTH_PREFIX);
+    }
+
     private static String authorizationSummary(String authorization) {
         if (!isUsable(authorization)) {
             return "empty";
         }
         if (!authorization.startsWith(AUTH_PREFIX)) {
-            return "invalid-format,len=" + authorization.length();
+            return "other-scheme,len=" + authorization.length();
         }
         return credentialSummary(extractAuthorizationAccessKey(authorization));
     }

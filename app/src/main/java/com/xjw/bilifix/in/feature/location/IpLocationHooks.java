@@ -32,15 +32,11 @@ public final class IpLocationHooks {
     private static final String PROFILE_CHANNEL = "master";
     private static final String PROFILE_STATISTICS =
             "{\"appId\":1,\"platform\":3,\"version\":\"8.88.0\",\"abtest\":\"\"}";
-    private static final String COMMENT_MOBI_APP = "android";
-    private static final int COMMENT_BUILD = 8880300;
-    private static final int COMMENT_APP_ID = 1;
-    private static final String COMMENT_VERSION_NAME = "8.88.0";
+    private static final String COMMENT_MOBI_APP = "android_hd";
+    private static final int COMMENT_BUILD = 2001100;
+    private static final int COMMENT_APP_ID = 5;
+    private static final String COMMENT_VERSION_NAME = "2.0.1";
     private static final String COMMENT_CHANNEL = "master";
-    private static final String COMMENT_LOCALE_LANGUAGE = "zh";
-    private static final String COMMENT_LOCALE_SCRIPT = "Hans";
-    private static final String COMMENT_LOCALE_REGION = "CN";
-    private static final String COMMENT_TIMEZONE = "Asia/Shanghai";
     private static final String REPLY_SERVICE =
             "bilibili.main.community.reply.v1.Reply/";
     private static final String PROFILE_PATH = "/x/v2/space";
@@ -101,6 +97,7 @@ public final class IpLocationHooks {
     private final AtomicInteger transportLogCount = new AtomicInteger();
     private final AtomicInteger transportRewriteLogCount = new AtomicInteger();
     private final AtomicInteger transportRepairLogCount = new AtomicInteger();
+    private final AtomicBoolean captureNextHeaderDump = new AtomicBoolean(true);
     private final AtomicInteger headerDumpLogCount = new AtomicInteger();
     private final AtomicInteger requestBodyLogCount = new AtomicInteger();
     private final AtomicInteger commentHitLogCount = new AtomicInteger();
@@ -126,8 +123,8 @@ public final class IpLocationHooks {
     public void install() {
         installGroup("profile and REST comment request identity", this::installRestIdentityHooks);
         installGroup("Moss comment request identity", this::installMossIdentityHooks);
-        installGroup("profile account state probe", this::installProfileHeaderTagDiagnostics);
-        installGroup("comment account state probe", this::installMainListDiagnostics);
+        installGroup("profile location state probe", this::installProfileHeaderTagDiagnostics);
+        installGroup("comment location state probe", this::installMainListDiagnostics);
         installGroup("profile response filter", this::installProfileResponseFilter);
     }
 
@@ -143,7 +140,8 @@ public final class IpLocationHooks {
             return;
         }
         if (!module.isVerboseLoggingEnabled()) {
-            module.info("IP location diagnostics skipped: verboseLogging=false");
+            module.info("IP location UI diagnostics skipped: verboseLogging=false; "
+                    + "request and response state probes remain enabled");
             return;
         }
         installGroup("comment response diagnostics", this::installCommentDiagnostics);
@@ -260,14 +258,6 @@ public final class IpLocationHooks {
         ProtoFawkesCommentReadRewriter fawkes = new ProtoFawkesCommentReadRewriter(
                 module, classLoader,
                 "com.bapis.bilibili.metadata.fawkes.FawkesReq");
-        ProtoRewriter locale = null;
-        try {
-            locale = new ProtoLocaleRewriter(module, classLoader);
-        } catch (Throwable throwable) {
-            module.error("IP location locale rewriter unavailable", throwable);
-        }
-        ProtoRewriter localeRewriter = locale;
-
         Class<?> metadataFactoryClass = module.load(classLoader, "if1.a");
         Method createMetadata = module.declaredMethod(metadataFactoryClass, "n");
         Method createDevice = module.declaredMethod(metadataFactoryClass, "k");
@@ -278,11 +268,6 @@ public final class IpLocationHooks {
         installProtoRewriteHook("IP location Moss metadata", createMetadata, metadata);
         installProtoRewriteHook("IP location Moss device", createDevice, device);
         installProtoRewriteHook("IP location Moss Fawkes", createFawkes, fawkes);
-        if (localeRewriter != null) {
-            Method createLocale = module.declaredMethod(metadataFactoryClass, "m");
-            module.deoptimizeFeatureMethod(createLocale);
-            installProtoRewriteHook("IP location Moss locale", createLocale, localeRewriter);
-        }
         if (resolvedAuth != null) {
             CommentAuthCoordinator auth = resolvedAuth;
             installMossSubgroup("comment authentication diagnostics and repair",
@@ -312,20 +297,33 @@ public final class IpLocationHooks {
 
         installMossSubgroup("gRPC final transport",
                 () -> installMossGrpcTransportScopes(descriptorName));
-        // Authoritative rewrite: the factory hooks above sit on tiny static methods that ART
-        // eventually inlines into their callers, silently bypassing them after the app has been
-        // running for a while. Rewriting the assembled header keeps working regardless.
         installMossSubgroup("gRPC final header rewrite",
-                () -> installMossGrpcHeaderRewrites(metadata, device, localeRewriter, fawkes));
+                () -> installMossGrpcHeaderRewrites(metadata, device, fawkes));
         installMossOkHttpScopes();
         installMossSubgroup("OkHttp encoded header fallback",
                 () -> installEncodedMossHeaderHooks(
-                        metadataFactoryClass, metadata, device, localeRewriter, fawkes));
+                        metadataFactoryClass, metadata, device, fawkes));
+
+        MossHeaderDiagnostics diagnostics = createHeaderDiagnostics();
+        MossTransportHooks transport = new MossTransportHooks(module, classLoader,
+                IpLocationHooks::isCommentReadRpc, (source, headers) ->
+                withScope(ScopeKind.COMMENT_RPC, source, () -> {
+                    rewriteOutgoingHeader(headers, "x-bili-metadata-bin", metadataIdentity, source);
+                    rewriteOutgoingHeader(headers, "x-bili-device-bin", device, source);
+                    rewriteOutgoingHeader(headers, "x-bili-fawkes-req-bin", fawkes, source);
+                    if (authForMetadata != null) {
+                        authForMetadata.inspectAndRepairFinalHeaders(source, headers);
+                    }
+                    logHeaderDump(diagnostics, headers, source);
+                    return null;
+                }));
+        installMossSubgroup("gRPC outgoing header check", transport::installGrpc);
+        installMossSubgroup("OkHttp outgoing header check", transport::installOkHttp);
     }
 
     private void installMossGrpcHeaderRewrites(
             ProtoRewriter metadata, ProtoRewriter device,
-            ProtoRewriter locale, ProtoRewriter fawkes) throws Throwable {
+            ProtoRewriter fawkes) throws Throwable {
         Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
         Class<?> headerKeyClass = module.load(classLoader, "io.grpc.n0$h");
         Method headerGet = module.declaredMethod(headersClass, "g", headerKeyClass);
@@ -337,9 +335,6 @@ public final class IpLocationHooks {
         List<HeaderRewrite> identityRewrites = new ArrayList<>();
         identityRewrites.add(new HeaderRewrite("a", "x-bili-metadata-bin", metadata));
         identityRewrites.add(new HeaderRewrite("c", "x-bili-device-bin", device));
-        if (locale != null) {
-            identityRewrites.add(new HeaderRewrite("f", "x-bili-locale-bin", locale));
-        }
         installMossGrpcHeaderRewrite("metadata/device", "of1.a", "c", headersClass,
                 access,
                 identityRewrites.toArray(new HeaderRewrite[0]));
@@ -359,8 +354,6 @@ public final class IpLocationHooks {
             rewrite.keyField = module.declaredField(interceptorClass, rewrite.keyFieldName);
         }
         module.deoptimizeFeatureMethod(populate);
-        MossHeaderDiagnostics diagnostics = createHeaderDiagnostics(
-                part, interceptorClass, headersClass, access);
 
         module.addHook("IP location Moss gRPC " + part + " header rewrite", populate,
                 hookChain -> {
@@ -383,49 +376,52 @@ public final class IpLocationHooks {
                                     + rewrite.headerName + " source=" + scope.source, throwable);
                         }
                     }
-                    logHeaderDump(diagnostics, headers, interceptor, scope);
                     return result;
                 });
     }
 
-    private MossHeaderDiagnostics createHeaderDiagnostics(
-            String part, Class<?> interceptorClass, Class<?> headersClass,
-            HeaderAccess access) {
-        if (!"metadata/device".equals(part)) {
-            return null;
-        }
+    private MossHeaderDiagnostics createHeaderDiagnostics() {
         try {
-            Method headerKeys = null;
-            try {
-                headerKeys = module.declaredMethod(headersClass, "i");
-            } catch (Throwable ignored) {
-            }
-            return new MossHeaderDiagnostics(
-                    module, classLoader, interceptorClass, access.get, headerKeys);
+            return new MossHeaderDiagnostics(module, classLoader);
         } catch (Throwable throwable) {
             module.error("IP location full header diagnostics unavailable", throwable);
             return null;
         }
     }
 
-    private void logHeaderDump(
-            MossHeaderDiagnostics diagnostics, Object headers, Object interceptor,
-            RequestScope scope) {
-        if (diagnostics == null || !module.isVerboseLoggingEnabled()) {
+    private void logHeaderDump(MossHeaderDiagnostics diagnostics,
+            MossTransportHooks.Headers headers, String source) {
+        if (diagnostics == null) {
+            return;
+        }
+        boolean capture = source.endsWith("/MainList")
+                && captureNextHeaderDump.getAndSet(false);
+        if (!capture && !module.isVerboseLoggingEnabled()) {
             return;
         }
         int sequence = headerDumpLogCount.incrementAndGet();
-        if (!shouldSample(sequence, 6, 50)) {
+        if (!capture && !shouldSample(sequence, 3, 50)) {
             return;
         }
-        try {
-            for (String line : diagnostics.describe(headers, interceptor)) {
-                module.info("IP location request header: source=" + scope.source
-                        + " sample=" + sequence + " " + line);
-            }
-        } catch (Throwable throwable) {
-            module.error("IP location request header dump failed: source="
-                    + scope.source, throwable);
+        for (String line : diagnostics.describe(headers)) {
+            module.info("IP location request header: source=" + source
+                    + " sample=" + sequence + " " + line);
+        }
+    }
+
+    private void rewriteOutgoingHeader(MossTransportHooks.Headers headers,
+            String name, ProtoRewriter rewriter, String source) throws Throwable {
+        byte[] original = headers.binary(name);
+        if (original == null) {
+            return;
+        }
+        ProtoRewriteResult rewritten = rewriter.rewrite(original);
+        if (rewritten.changed) {
+            headers.binary(name, rewritten.bytes);
+            int repairs = transportRepairLogCount.incrementAndGet();
+            module.warn("IP location outgoing identity repaired: source=" + source
+                    + " header=" + name + " oldIdentity=" + rewritten.originalIdentity
+                    + " newIdentity=" + rewritten.rewrittenIdentity + " repair=" + repairs);
         }
     }
 
@@ -443,8 +439,8 @@ public final class IpLocationHooks {
         ProtoRewriteResult rewritten = rewrite.rewriter.rewrite((byte[]) current);
         boolean repaired = rewritten.changed;
         if (repaired) {
-            // Reaching here means the factory hook did not run for this request, which is the
-            // long-uptime failure mode this rewrite exists to cover.
+            // A factory may have been bypassed, or a later interceptor changed the value.
+            // The mismatch alone does not identify why the earlier rewrite was lost.
             if (shouldSample(transportRepairLogCount.incrementAndGet(), 10, 100)) {
                 module.warn("IP location transport header repaired: header="
                         + rewrite.headerName + " source=" + scope.source
@@ -464,8 +460,7 @@ public final class IpLocationHooks {
 
     private void installEncodedMossHeaderHooks(
             Class<?> metadataFactoryClass, ProtoRewriter metadata,
-            ProtoRewriter device, ProtoRewriter locale, ProtoRewriter fawkes)
-            throws Throwable {
+            ProtoRewriter device, ProtoRewriter fawkes) throws Throwable {
         Method createEncodedMetadata = module.declaredMethod(metadataFactoryClass, "f");
         Method createEncodedDevice = module.declaredMethod(metadataFactoryClass, "c");
         Method createEncodedFawkes = module.declaredMethod(metadataFactoryClass, "b");
@@ -497,13 +492,6 @@ public final class IpLocationHooks {
         installEncodedProtoRewriteHook(
                 "IP location Moss OkHttp Fawkes", createEncodedFawkes,
                 fawkes, codec, decodeHeader, encodeHeader);
-        if (locale != null) {
-            Method createEncodedLocale = module.declaredMethod(metadataFactoryClass, "e");
-            module.deoptimizeFeatureMethod(createEncodedLocale);
-            installEncodedProtoRewriteHook(
-                    "IP location Moss OkHttp locale", createEncodedLocale,
-                    locale, codec, decodeHeader, encodeHeader);
-        }
     }
 
     private void installProtoRewriteHook(
@@ -605,12 +593,12 @@ public final class IpLocationHooks {
     }
 
     private void logCommentRequestBody(String methodName, Object request) {
-        if (!module.isVerboseLoggingEnabled() || request == null
-                || !methodName.endsWith("/MainList")) {
+        if (request == null || !methodName.endsWith("/MainList")) {
             return;
         }
         int sequence = requestBodyLogCount.incrementAndGet();
-        if (!shouldSample(sequence, 10, 50)) {
+        if (sequence > 3
+                && !(module.isVerboseLoggingEnabled() && shouldSample(sequence, 10, 50))) {
             return;
         }
         try {
@@ -757,6 +745,8 @@ public final class IpLocationHooks {
                 "com.bapis.bilibili.main.community.reply.v1.ReplyInfo");
         Class<?> replyControlClass = module.load(classLoader,
                 "com.bapis.bilibili.main.community.reply.v1.ReplyControl");
+        Class<?> subjectControlClass = module.load(classLoader,
+                "com.bapis.bilibili.main.community.reply.v1.SubjectControl");
         Class<?> paginationClass = module.load(classLoader,
                 "com.bapis.bilibili.pagination.FeedPaginationReply");
         Class<?> converterClass = module.load(classLoader,
@@ -769,6 +759,9 @@ public final class IpLocationHooks {
         Method getRepliesCount = module.publicMethod(replyClass, "getRepliesCount");
         Method getRepliesList = module.publicMethod(replyClass, "getRepliesList");
         Method getTopRepliesCount = module.publicMethod(replyClass, "getTopRepliesCount");
+        Method getModeValue = module.publicMethod(replyClass, "getModeValue");
+        Method getSubjectControl = module.publicMethod(replyClass, "getSubjectControl");
+        Method getSubjectCount = module.publicMethod(subjectControlClass, "getCount");
         Method hasPaginationReply = module.publicMethod(replyClass, "hasPaginationReply");
         Method getPaginationReply = module.publicMethod(replyClass, "getPaginationReply");
         Method getPaginationEndText = module.publicMethod(replyClass,
@@ -785,6 +778,9 @@ public final class IpLocationHooks {
                 int replies = ((Number) module.invoke(getRepliesCount, reply)).intValue();
                 int topReplies = ((Number) module.invoke(
                         getTopRepliesCount, reply)).intValue();
+                int responseMode = ((Number) module.invoke(getModeValue, reply)).intValue();
+                long subjectCount = ((Number) module.invoke(getSubjectCount,
+                        module.invoke(getSubjectControl, reply))).longValue();
                 boolean hasPagination = (Boolean) module.invoke(
                         hasPaginationReply, reply);
                 Object pagination = module.invoke(getPaginationReply, reply);
@@ -793,21 +789,24 @@ public final class IpLocationHooks {
                 String endText = String.valueOf(module.invoke(getPaginationEndText, reply));
                 boolean firstPage = Boolean.TRUE.equals(hookChain.getArg(3));
                 boolean sparseFirstPage = firstPage && replies == 3 && topReplies == 0
-                        && !hasPagination && nextOffset.isEmpty() && endText.isEmpty();
+                        && prevOffset.isEmpty() && nextOffset.isEmpty() && endText.isEmpty();
                 LocationSummary locationSummary = inspectMainListLocations(
                         module.invoke(getRepliesList, reply), getReplyControl, getLocation);
                 if (locationSummary.present + locationSummary.missing > 0) {
-                    reportAccountState(ScopeKind.COMMENT_RPC, locationSummary.present > 0,
+                    reportLocationState(ScopeKind.COMMENT_RPC, locationSummary.present > 0,
                             "locationsPresent=" + locationSummary.present
                                     + " locationsMissing=" + locationSummary.missing);
                 }
                 int sequence = mainListLogCount.incrementAndGet();
-                if (sparseFirstPage
+                if (sequence <= 3 || sparseFirstPage
                         || (module.isVerboseLoggingEnabled() && shouldSample(sequence, 10, 50))) {
                     String message = "IP location MainList response: firstPage=" + firstPage
                             + " replies=" + replies
                             + " topReplies=" + topReplies
+                            + " responseMode=" + responseMode
+                            + " subjectCount=" + subjectCount
                             + " hasPagination=" + hasPagination
+                            + " hasNextPage=" + !nextOffset.isEmpty()
                             + " prevOffsetLength=" + prevOffset.length()
                             + " nextOffsetLength=" + nextOffset.length()
                             + " locationsPresent=" + locationSummary.present
@@ -945,7 +944,7 @@ public final class IpLocationHooks {
         return dropped;
     }
 
-    private void reportAccountState(
+    private void reportLocationState(
             ScopeKind kind, boolean locationsAvailable, String detail) {
         long uptime = SystemClock.elapsedRealtime() - installedUptimeMs;
         Boolean previous;
@@ -960,13 +959,16 @@ public final class IpLocationHooks {
         if (previous != null && previous == locationsAvailable) {
             return;
         }
-        String message = "IP location account state "
+        if (kind == ScopeKind.COMMENT_RPC && !locationsAvailable) {
+            captureNextHeaderDump.set(true);
+        }
+        String message = "IP location response state "
                 + (previous == null ? "observed"
                 : locationsAvailable ? "recovered" : "DEGRADED")
                 + ": probe=" + kind.logName
                 + " locationsAvailable=" + locationsAvailable
                 + " " + detail
-                + " identity=" + (kind == ScopeKind.PROFILE_REST
+                + " configuredIdentity=" + (kind == ScopeKind.PROFILE_REST
                         ? profileIdentity() : commentIdentity(true))
                 + " appkey=" + appkeyPolicy(kind)
                 + " uptimeMs=" + uptime
@@ -1106,7 +1108,7 @@ public final class IpLocationHooks {
                 break;
             }
         }
-        reportAccountState(ScopeKind.PROFILE_REST, hasLocation,
+        reportLocationState(ScopeKind.PROFILE_REST, hasLocation,
                 "locationTag=" + hasLocation + " tags=" + tags.size());
 
         int sequence = profileLogCount.incrementAndGet();
@@ -1446,106 +1448,6 @@ public final class IpLocationHooks {
                     (byte[]) rewrittenBytes, originalIdentity,
                     commentIdentity(includesDeviceDetails));
         }
-    }
-
-    private static final class ProtoLocaleRewriter implements ProtoRewriter {
-        private final HookApi module;
-        private final Method parseFrom;
-        private final Method getCLocale;
-        private final Method getSLocale;
-        private final Method getTimezone;
-        private final Method toBuilder;
-        private final Method setCLocale;
-        private final Method setSLocale;
-        private final Method setTimezone;
-        private final Method build;
-        private final Method toByteArray;
-        private final Method idsGetLanguage;
-        private final Method idsGetScript;
-        private final Method idsGetRegion;
-        private final Object desiredIds;
-
-        private ProtoLocaleRewriter(HookApi module, ClassLoader classLoader) throws Throwable {
-            this.module = module;
-            Class<?> localeClass = module.load(
-                    classLoader, "com.bapis.bilibili.metadata.locale.Locale");
-            Class<?> localeBuilderClass = module.load(
-                    classLoader, "com.bapis.bilibili.metadata.locale.Locale$b");
-            Class<?> idsClass = module.load(
-                    classLoader, "com.bapis.bilibili.metadata.locale.LocaleIds");
-            Class<?> idsBuilderClass = module.load(
-                    classLoader, "com.bapis.bilibili.metadata.locale.LocaleIds$b");
-
-            parseFrom = module.publicMethod(localeClass, "parseFrom", byte[].class);
-            getCLocale = module.publicMethod(localeClass, "getCLocale");
-            getSLocale = module.publicMethod(localeClass, "getSLocale");
-            getTimezone = module.publicMethod(localeClass, "getTimezone");
-            toBuilder = module.publicMethod(localeClass, "toBuilder");
-            setCLocale = module.publicMethod(localeBuilderClass, "setCLocale", idsClass);
-            setSLocale = module.publicMethod(localeBuilderClass, "setSLocale", idsClass);
-            setTimezone = module.publicMethod(
-                    localeBuilderClass, "setTimezone", String.class);
-            build = module.publicMethod(localeBuilderClass, "build");
-            toByteArray = module.publicMethod(localeClass, "toByteArray");
-            idsGetLanguage = module.publicMethod(idsClass, "getLanguage");
-            idsGetScript = module.publicMethod(idsClass, "getScript");
-            idsGetRegion = module.publicMethod(idsClass, "getRegion");
-
-            Method newIdsBuilder = module.publicMethod(idsClass, "newBuilder");
-            Object idsBuilder = module.invoke(newIdsBuilder, null);
-            module.invoke(
-                    module.publicMethod(idsBuilderClass, "setLanguage", String.class),
-                    idsBuilder, COMMENT_LOCALE_LANGUAGE);
-            module.invoke(
-                    module.publicMethod(idsBuilderClass, "setScript", String.class),
-                    idsBuilder, COMMENT_LOCALE_SCRIPT);
-            module.invoke(
-                    module.publicMethod(idsBuilderClass, "setRegion", String.class),
-                    idsBuilder, COMMENT_LOCALE_REGION);
-            desiredIds = module.invoke(
-                    module.publicMethod(idsBuilderClass, "build"), idsBuilder);
-        }
-
-        @Override
-        public ProtoRewriteResult rewrite(byte[] source) throws Throwable {
-            Object message = module.invoke(parseFrom, null, (Object) source);
-            String original = describeIds(module.invoke(getCLocale, message))
-                    + "/" + describeIds(module.invoke(getSLocale, message))
-                    + "/tz=" + textOf(module.invoke(getTimezone, message));
-
-            Object builder = module.invoke(toBuilder, message);
-            module.invoke(setCLocale, builder, desiredIds);
-            module.invoke(setSLocale, builder, desiredIds);
-            module.invoke(setTimezone, builder, COMMENT_TIMEZONE);
-            Object rewrittenMessage = module.invoke(build, builder);
-            Object rewrittenBytes = module.invoke(toByteArray, rewrittenMessage);
-            if (!(rewrittenBytes instanceof byte[])) {
-                throw new IllegalStateException("toByteArray returned "
-                        + summarize(rewrittenBytes));
-            }
-            return new ProtoRewriteResult(
-                    (byte[]) rewrittenBytes, original, commentLocaleIdentity());
-        }
-
-        private String describeIds(Object ids) throws Throwable {
-            if (ids == null) {
-                return "<absent>";
-            }
-            return textOf(module.invoke(idsGetLanguage, ids))
-                    + "-" + textOf(module.invoke(idsGetScript, ids))
-                    + "-" + textOf(module.invoke(idsGetRegion, ids));
-        }
-
-        private static String textOf(Object value) {
-            String text = value == null ? "" : String.valueOf(value);
-            return text.isEmpty() ? "?" : text;
-        }
-    }
-
-    private static String commentLocaleIdentity() {
-        String ids = COMMENT_LOCALE_LANGUAGE + "-" + COMMENT_LOCALE_SCRIPT
-                + "-" + COMMENT_LOCALE_REGION;
-        return ids + "/" + ids + "/tz=" + COMMENT_TIMEZONE;
     }
 
     private final class ProtoFawkesCommentReadRewriter implements ProtoRewriter {

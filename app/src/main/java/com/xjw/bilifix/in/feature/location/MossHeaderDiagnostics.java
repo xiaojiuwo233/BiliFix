@@ -2,9 +2,7 @@ package com.xjw.bilifix.in.feature.location;
 
 import com.xjw.bilifix.in.core.HookApi;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -14,75 +12,15 @@ import java.util.List;
 
 final class MossHeaderDiagnostics {
 
-    private static final String FIELD_METADATA = "a";
-    private static final String FIELD_AUTHORIZATION = "b";
-    private static final String FIELD_DEVICE = "c";
-    private static final String FIELD_NETWORK = "d";
-    private static final String FIELD_RESTRICTION = "e";
-    private static final String FIELD_LOCALE = "f";
-    private static final String FIELD_EXPS = "g";
-    private static final String FIELD_BUVID = "h";
-    private static final String HEADER_IP_REGION = "x-bili-metadata-ip-region";
-    private static final String HEADER_LEGAL_REGION = "x-bili-metadata-legal-region";
-    private static final String HEADER_RECENT_REGION = "x-bili-metadata-recent-region";
-    private static final String HEADER_AURORA_ZONE = "x-bili-aurora-zone";
-    private static final String HEADER_GAIA_VTOKEN = "x-bili-gaia-vtoken";
-    private static final String HEADER_TICKET = "x-bili-ticket";
-    private static final String HEADER_MID = "x-bili-mid";
-    private static final String HEADER_AURORA_EID = "x-bili-aurora-eid";
-
-    private final HookApi module;
-    private final Method headerGet;
-    private final Method headerKeys;
-
-    private final Field metadataKeyField;
-    private final Field authorizationKeyField;
-    private final Field deviceKeyField;
-    private final Field networkKeyField;
-    private final Field restrictionKeyField;
-    private final Field localeKeyField;
-    private final Field expsKeyField;
-    private final Field buvidKeyField;
-    private final Object ipRegionKey;
-    private final Object legalRegionKey;
-    private final Object recentRegionKey;
-    private final Object auroraZoneKey;
-    private final Object gaiaVtokenKey;
-    private final Object ticketKey;
-    private final Object midKey;
-    private final Object auroraEidKey;
-
     private final ProtoDescriber metadataDescriber;
     private final ProtoDescriber deviceDescriber;
+    private final ProtoDescriber fawkesDescriber;
     private final ProtoDescriber networkDescriber;
     private final ProtoDescriber restrictionDescriber;
     private final LocaleDescriber localeDescriber;
     private final ExpsDescriber expsDescriber;
 
-    MossHeaderDiagnostics(
-            HookApi module, ClassLoader classLoader, Class<?> interceptorClass,
-            Method headerGet, Method headerKeys) throws Throwable {
-        this.module = module;
-        this.headerGet = headerGet;
-        this.headerKeys = headerKeys;
-
-        metadataKeyField = optionalField(interceptorClass, FIELD_METADATA);
-        authorizationKeyField = optionalField(interceptorClass, FIELD_AUTHORIZATION);
-        deviceKeyField = optionalField(interceptorClass, FIELD_DEVICE);
-        networkKeyField = optionalField(interceptorClass, FIELD_NETWORK);
-        restrictionKeyField = optionalField(interceptorClass, FIELD_RESTRICTION);
-        localeKeyField = optionalField(interceptorClass, FIELD_LOCALE);
-        expsKeyField = optionalField(interceptorClass, FIELD_EXPS);
-        buvidKeyField = optionalField(interceptorClass, FIELD_BUVID);
-        ipRegionKey = createAsciiKey(module, classLoader, HEADER_IP_REGION);
-        legalRegionKey = createAsciiKey(module, classLoader, HEADER_LEGAL_REGION);
-        recentRegionKey = createAsciiKey(module, classLoader, HEADER_RECENT_REGION);
-        auroraZoneKey = createAsciiKey(module, classLoader, HEADER_AURORA_ZONE);
-        gaiaVtokenKey = createAsciiKey(module, classLoader, HEADER_GAIA_VTOKEN);
-        ticketKey = createAsciiKey(module, classLoader, HEADER_TICKET);
-        midKey = createAsciiKey(module, classLoader, HEADER_MID);
-        auroraEidKey = createAsciiKey(module, classLoader, HEADER_AURORA_EID);
-
+    MossHeaderDiagnostics(HookApi module, ClassLoader classLoader) throws Throwable {
         metadataDescriber = new ProtoDescriber(
                 module, classLoader, "com.bapis.bilibili.metadata.Metadata")
                 .masked("accessKey", "getAccessKey")
@@ -112,6 +50,12 @@ final class MossHeaderDiagnostics {
                 .masked("fp", "getFp")
                 .plain("fts", "getFts");
 
+        fawkesDescriber = new ProtoDescriber(
+                module, classLoader, "com.bapis.bilibili.metadata.fawkes.FawkesReq")
+                .plain("appkey", "getAppkey")
+                .plain("env", "getEnv")
+                .masked("sessionId", "getSessionId");
+
         networkDescriber = new ProtoDescriber(
                 module, classLoader, "com.bapis.bilibili.metadata.network.Network")
                 .plain("type", "getType")
@@ -132,157 +76,62 @@ final class MossHeaderDiagnostics {
         expsDescriber = new ExpsDescriber(module, classLoader);
     }
 
-    List<String> describe(Object headers, Object interceptor) {
+    List<String> describe(MossTransportHooks.Headers headers) {
         List<String> lines = new ArrayList<>();
-        lines.add("metadata " + describeBinary(
-                headers, interceptor, metadataKeyField, metadataDescriber));
-        lines.add("device " + describeBinary(
-                headers, interceptor, deviceKeyField, deviceDescriber));
-        lines.add("locale " + describeBinary(
-                headers, interceptor, localeKeyField, localeDescriber));
-        lines.add("network " + describeBinary(
-                headers, interceptor, networkKeyField, networkDescriber));
+        lines.add("metadata " + describeBinary(headers, "x-bili-metadata-bin", metadataDescriber));
+        lines.add("device " + describeBinary(headers, "x-bili-device-bin", deviceDescriber));
+        lines.add("fawkes " + describeBinary(headers, "x-bili-fawkes-req-bin", fawkesDescriber));
+        lines.add("locale " + describeBinary(headers, "x-bili-locale-bin", localeDescriber));
+        lines.add("network " + describeBinary(headers, "x-bili-network-bin", networkDescriber));
         lines.add("restriction " + describeBinary(
-                headers, interceptor, restrictionKeyField, restrictionDescriber));
-        lines.add("exps " + describeBinary(
-                headers, interceptor, expsKeyField, expsDescriber));
-        lines.add("buvid {" + describeAscii(headers, interceptor, buvidKeyField, true) + "}");
-        lines.add("authorization {"
-                + describeAscii(headers, interceptor, authorizationKeyField, false) + "}");
-        lines.add("regions {ip=" + describeAscii(headers, ipRegionKey)
-                + "; legal=" + describeAscii(headers, legalRegionKey)
-                + "; recent=" + describeAscii(headers, recentRegionKey) + "}");
-        lines.add("routing {auroraZone=" + describeSensitiveAscii(headers, auroraZoneKey)
-                + "; gaiaVtoken=" + describeSensitiveAscii(headers, gaiaVtokenKey)
-                + "; ticket=" + describeSensitiveAscii(headers, ticketKey) + "}");
-        lines.add("accountRoute {mid=" + describeSensitiveAscii(headers, midKey)
-                + "; auroraEid=" + describeSensitiveAscii(headers, auroraEidKey) + "}");
-        lines.add("presentHeaders " + describeKeys(headers));
+                headers, "x-bili-restriction-bin", restrictionDescriber));
+        lines.add("exps " + describeBinary(headers, "x-bili-exps-bin", expsDescriber));
+        lines.add("buvid {" + describeAscii(headers, "buvid", true) + "}");
+        lines.add("authorization {" + describeAscii(headers, "authorization", true) + "}");
+        lines.add("client {userAgent=" + describeAscii(headers, "user-agent", false)
+                + "; appKey=" + describeAscii(headers, "app-key", false)
+                + "; engine=" + describeAscii(headers, "bili-http-engine", false) + "}");
+        lines.add("regions {ip=" + describeAscii(headers, "x-bili-metadata-ip-region", false)
+                + "; legal=" + describeAscii(headers, "x-bili-metadata-legal-region", false)
+                + "; recent=" + describeAscii(headers, "x-bili-metadata-recent-region", false) + "}");
+        lines.add("routing {auroraZone=" + describeAscii(headers, "x-bili-aurora-zone", true)
+                + "; gaiaVtoken=" + describeAscii(headers, "x-bili-gaia-vtoken", true)
+                + "; ticket=" + describeAscii(headers, "x-bili-ticket", true) + "}");
+        lines.add("accountRoute {mid=" + describeAscii(headers, "x-bili-mid", true)
+                + "; auroraEid=" + describeAscii(headers, "x-bili-aurora-eid", true) + "}");
+        try {
+            List<String> names = new ArrayList<>();
+            for (Object name : headers.names()) {
+                names.add(String.valueOf(name));
+            }
+            Collections.sort(names);
+            lines.add("presentHeaders " + names);
+        } catch (Throwable ignored) {
+            lines.add("presentHeaders [unavailable]");
+        }
         return lines;
     }
 
     private String describeBinary(
-            Object headers, Object interceptor, Field keyField, Describer describer) {
-        if (keyField == null) {
-            return "{unavailable: key field absent}";
-        }
+            MossTransportHooks.Headers headers, String name, Describer describer) {
         try {
-            Object key = keyField.get(interceptor);
-            if (key == null) {
-                return "{absent}";
-            }
-            Object value = module.invoke(headerGet, headers, key);
-            if (!(value instanceof byte[])) {
-                return "{absent}";
-            }
-            return "{" + describer.describe((byte[]) value) + "}";
-        } catch (Throwable throwable) {
-            return "{failed: " + throwable + "}";
+            byte[] value = headers.binary(name);
+            return value == null ? "{absent}" : "{" + describer.describe(value) + "}";
+        } catch (Throwable ignored) {
+            return "{unreadable}";
         }
     }
 
     private String describeAscii(
-            Object headers, Object interceptor, Field keyField, boolean keepPrefix) {
-        if (keyField == null) {
-            return "unavailable: key field absent";
-        }
+            MossTransportHooks.Headers headers, String name, boolean sensitive) {
         try {
-            Object key = keyField.get(interceptor);
-            if (key == null) {
-                return "absent";
-            }
-            Object value = module.invoke(headerGet, headers, key);
+            String value = headers.ascii(name);
             if (value == null) {
                 return "absent";
             }
-            String text = String.valueOf(value);
-            return keepPrefix ? identifier(text) : summarize(text);
-        } catch (Throwable throwable) {
-            return "failed: " + throwable;
-        }
-    }
-
-    private String describeKeys(Object headers) {
-        if (headerKeys == null) {
-            return "[unavailable]";
-        }
-        try {
-            Object keys = module.invoke(headerKeys, headers);
-            if (!(keys instanceof Collection)) {
-                return "[unavailable]";
-            }
-            List<String> names = new ArrayList<>();
-            for (Object key : (Collection<?>) keys) {
-                names.add(String.valueOf(key));
-            }
-            Collections.sort(names);
-            return names.toString();
-        } catch (Throwable throwable) {
-            return "[failed: " + throwable + "]";
-        }
-    }
-
-    private String describeAscii(Object headers, Object key) {
-        if (key == null) {
-            return "unavailable";
-        }
-        try {
-            Object value = module.invoke(headerGet, headers, key);
-            String text = value == null ? "" : String.valueOf(value);
-            return text.isEmpty() ? "absent" : text;
-        } catch (Throwable throwable) {
-            return "failed: " + throwable;
-        }
-    }
-
-    private String describeSensitiveAscii(Object headers, Object key) {
-        if (key == null) {
-            return "unavailable";
-        }
-        try {
-            Object value = module.invoke(headerGet, headers, key);
-            return value == null ? "absent" : summarize(String.valueOf(value));
-        } catch (Throwable throwable) {
-            return "failed: " + throwable;
-        }
-    }
-
-    private static Object createAsciiKey(
-            HookApi module, ClassLoader classLoader, String name) {
-        try {
-            Class<?> headersClass = module.load(classLoader, "io.grpc.n0");
-            Class<?> keyClass = module.load(classLoader, "io.grpc.n0$h");
-            Class<?> marshallerClass = module.load(classLoader, "io.grpc.n0$d");
-            Object marshaller = null;
-            for (Field field : headersClass.getDeclaredFields()) {
-                if (!Modifier.isStatic(field.getModifiers())
-                        || !marshallerClass.isAssignableFrom(field.getType())) {
-                    continue;
-                }
-                field.setAccessible(true);
-                marshaller = field.get(null);
-                if (marshaller != null) {
-                    break;
-                }
-            }
-            if (marshaller == null) {
-                return null;
-            }
-            Method createKey = module.declaredMethod(
-                    keyClass, "e", String.class, marshallerClass);
-            return module.invoke(createKey, null, name, marshaller);
+            return sensitive ? summarize(value) : value;
         } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
-    private static Field optionalField(Class<?> owner, String name) {
-        try {
-            Field field = owner.getDeclaredField(name);
-            field.setAccessible(true);
-            return field;
-        } catch (Throwable ignored) {
-            return null;
+            return "unreadable";
         }
     }
 
