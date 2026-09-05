@@ -42,7 +42,6 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private final List<XposedInterface.HookHandle> hookHandles = new ArrayList<>();
     private volatile Handler mainHandler;
     private volatile SystemShareHooks systemShareHooks;
-    private volatile IpLocationHooks ipLocationHooks;
     private volatile HostVersion hostVersion;
 
     private volatile String processName = "unknown";
@@ -97,7 +96,6 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         new CompatFeatureHooks(this, classLoader).install();
         new PaidEmoticonHooks(this, classLoader).install();
         IpLocationHooks locationHooks = new IpLocationHooks(this, classLoader);
-        ipLocationHooks = locationHooks;
         if (mainProcess) {
             new DynamicArticleIdentityHooks(this, classLoader).install();
             new CommentTranslationHooks(this, classLoader).install();
@@ -130,7 +128,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                     ensureSettingsLoaded(context);
                     info("settings initialized from application onCreate");
                 }
-                installDiagnosticHooks();
+                logRuntimeState();
                 SystemShareHooks shareHooks = systemShareHooks;
                 if (shareHooks != null) {
                     mainHandler.post(shareHooks::installDeferredCommentHooks);
@@ -179,18 +177,10 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             warn("settings post-package initialization timed out; "
                     + "next feature context will retry");
         }
-        installDiagnosticHooks();
+        logRuntimeState();
         SystemShareHooks shareHooks = systemShareHooks;
         if (shareHooks != null) {
             shareHooks.installDeferredCommentHooks();
-        }
-    }
-
-    private void installDiagnosticHooks() {
-        logRuntimeState();
-        IpLocationHooks locationHooks = ipLocationHooks;
-        if (locationHooks != null) {
-            locationHooks.installDiagnostics();
         }
     }
 

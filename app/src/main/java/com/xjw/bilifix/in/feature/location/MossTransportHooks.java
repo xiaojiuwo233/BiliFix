@@ -7,19 +7,17 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.util.Base64;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Predicate;
 
-/** Checks assembled headers on both transports used by international 3.20.4. */
+/** Repairs assembled headers on both transports used by international 3.20.4. */
 final class MossTransportHooks {
     interface Headers {
         byte[] binary(String name) throws Throwable;
         String ascii(String name) throws Throwable;
         void binary(String name, byte[] value) throws Throwable;
         void ascii(String name, String value) throws Throwable;
-        Collection<?> names() throws Throwable;
     }
 
     @FunctionalInterface
@@ -117,7 +115,7 @@ final class MossTransportHooks {
 
     private static final class GrpcAccess {
         private final HookApi module;
-        private final Method get, discard, put, names, binaryKey, asciiKey;
+        private final Method get, discard, put, binaryKey, asciiKey;
         private final Object binaryMarshaller, asciiMarshaller;
         private final Map<String, Object> keys = new HashMap<>();
 
@@ -130,7 +128,6 @@ final class MossTransportHooks {
             get = module.declaredMethod(headers, "g", key);
             discard = module.declaredMethod(headers, "e", key);
             put = module.declaredMethod(headers, "o", key, Object.class);
-            names = module.declaredMethod(headers, "i");
             binaryKey = module.declaredMethod(key, "f", String.class, binary);
             asciiKey = module.declaredMethod(key, "e", String.class, ascii);
             binaryMarshaller = module.declaredField(headers, "c").get(null);
@@ -167,28 +164,22 @@ final class MossTransportHooks {
                     module.invoke(discard, headers, key);
                     module.invoke(put, headers, key, value);
                 }
-                public Collection<?> names() throws Throwable {
-                    return (Collection<?>) module.invoke(names, headers);
-                }
             };
         }
     }
 
     private static final class OkHttpAccess {
         private final HookApi module;
-        private final Method get, toBuilder, set, build, headers, names;
+        private final Method get, toBuilder, set, build;
 
         OkHttpAccess(HookApi module, ClassLoader loader) throws Throwable {
             this.module = module;
             Class<?> request = module.load(loader, "okhttp3.a0");
             Class<?> builder = module.load(loader, "okhttp3.a0$a");
-            Class<?> header = module.load(loader, "okhttp3.s");
             get = module.declaredMethod(request, "d", String.class);
             toBuilder = module.declaredMethod(request, "i");
             set = module.declaredMethod(builder, "h", String.class, String.class);
             build = module.declaredMethod(builder, "b");
-            headers = module.declaredMethod(request, "f");
-            names = module.declaredMethod(header, "h");
         }
 
         View view(Object request) { return new View(request); }
@@ -218,10 +209,6 @@ final class MossTransportHooks {
                     builder = module.invoke(toBuilder, original);
                 }
                 module.invoke(set, builder, name, value);
-            }
-            public Collection<?> names() throws Throwable {
-                return (Collection<?>) module.invoke(names,
-                        module.invoke(headers, request()));
             }
         }
     }

@@ -6,22 +6,17 @@ import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 final class CommentAuthCoordinator {
     private static final String AUTH_PREFIX = "identify_v1 ";
 
     private final HookApi module;
-    private final ClassLoader classLoader;
     private final ScopeProvider scopeProvider;
     private final Method accountInstance;
     private final Method accountAccessKey;
-    private final Method accountExpiry;
-    private final Method accountMid;
     private final Method metadataParseFrom;
     private final Method metadataGetAccessKey;
     private final Method metadataToBuilder;
@@ -29,23 +24,17 @@ final class CommentAuthCoordinator {
     private final Method metadataBuild;
     private final Method metadataToByteArray;
     private final AtomicInteger repairCount = new AtomicInteger();
-    private final AtomicInteger diagnosticCount = new AtomicInteger();
-    private final AtomicInteger accountEventGeneration = new AtomicInteger();
-    private final AtomicReference<String> lastDiagnosticState = new AtomicReference<>();
-    private volatile String lastAccountEvent = "none";
+    private final AtomicBoolean unknownAuthorizationReported = new AtomicBoolean();
 
     CommentAuthCoordinator(
             HookApi module, ClassLoader classLoader, ScopeProvider scopeProvider)
             throws Throwable {
         this.module = module;
-        this.classLoader = classLoader;
         this.scopeProvider = scopeProvider;
 
         Class<?> accountClass = module.load(classLoader, "com.bilibili.lib.accounts.i");
         accountInstance = module.declaredMethod(accountClass, "i", Context.class);
         accountAccessKey = module.declaredMethod(accountClass, "j");
-        accountExpiry = module.declaredMethod(accountClass, "q");
-        accountMid = module.declaredMethod(accountClass, "x");
 
         Class<?> metadataClass = module.load(
                 classLoader, "com.bapis.bilibili.metadata.Metadata");
@@ -62,11 +51,6 @@ final class CommentAuthCoordinator {
 
     void install(Class<?> metadataFactoryClass) throws Throwable {
         installAuthorizationFactory(metadataFactoryClass);
-        installAccountEvents();
-    }
-
-    int repairCount() {
-        return repairCount.get();
     }
 
     MetadataRewrite rewriteMetadata(byte[] source) throws Throwable {
@@ -80,8 +64,7 @@ final class CommentAuthCoordinator {
                 module.invoke(metadataGetAccessKey, metadata));
         if (!isUsable(desiredAccessKey)
                 || Objects.equals(originalAccessKey, desiredAccessKey)) {
-            String state = "accessKey{" + credentialSummary(originalAccessKey) + "}";
-            return new MetadataRewrite(source, state, state, false);
+            return new MetadataRewrite(source, false);
         }
 
         Object builder = module.invoke(metadataToBuilder, metadata);
@@ -93,11 +76,7 @@ final class CommentAuthCoordinator {
             throw new IllegalStateException(
                     "Metadata.toByteArray returned " + typeName(rewrittenBytes));
         }
-        return new MetadataRewrite(
-                (byte[]) rewrittenBytes,
-                "accessKey{" + credentialSummary(originalAccessKey) + "}",
-                "accessKey{" + credentialSummary(desiredAccessKey) + "}",
-                true);
+        return new MetadataRewrite((byte[]) rewrittenBytes, true);
     }
 
     private void installAuthorizationFactory(Class<?> metadataFactoryClass) throws Throwable {
@@ -119,17 +98,12 @@ final class CommentAuthCoordinator {
                             || Objects.equals(originalAccessKey, desiredAccessKey)) {
                         return result;
                     }
-                    int repairs = repairCount.incrementAndGet();
-                    module.warn("IP location comment authorization factory repaired: source="
-                            + source
-                            + " authorization={" + authorizationSummary(originalAuthorization)
-                            + "} account={" + credentialSummary(desiredAccessKey) + "}"
-                            + " repair=" + repairs);
+                    logRepair(source, true, false);
                     return AUTH_PREFIX + desiredAccessKey;
                 });
     }
 
-    void inspectAndRepairFinalHeaders(String source, MossTransportHooks.Headers headers)
+    void repairFinalHeaders(String source, MossTransportHooks.Headers headers)
             throws Throwable {
         byte[] metadataValue = headers.binary("x-bili-metadata-bin");
         String authorization = headers.ascii("authorization");
@@ -137,133 +111,43 @@ final class CommentAuthCoordinator {
                 ? null : readMetadataAccessKey(metadataValue);
         String authorizationAccessKey = extractAuthorizationAccessKey(authorization);
         String accountKey = readCurrentAccessKey();
-        String originalMetadataAccessKey = metadataAccessKey;
-        String originalAuthorizationAccessKey = authorizationAccessKey;
-
-        boolean metadataMatches = isUsable(accountKey)
-                && Objects.equals(metadataAccessKey, accountKey);
-        boolean authorizationMatches = isUsable(accountKey)
-                && Objects.equals(authorizationAccessKey, accountKey);
         boolean metadataRepaired = false;
         boolean authorizationRepaired = false;
 
         if (isUsable(accountKey) && metadataValue != null
-                && !metadataMatches) {
+                && !Objects.equals(metadataAccessKey, accountKey)) {
             MetadataRewrite rewrite = rewriteMetadata(metadataValue, accountKey);
             if (rewrite.changed) {
                 headers.binary("x-bili-metadata-bin", rewrite.bytes);
-                metadataAccessKey = accountKey;
-                metadataMatches = true;
                 metadataRepaired = true;
             }
         }
         if (isUsable(accountKey) && isRepairableAuthorization(authorization)
-                && !authorizationMatches) {
+                && !Objects.equals(authorizationAccessKey, accountKey)) {
             headers.ascii("authorization", AUTH_PREFIX + accountKey);
-            authorizationAccessKey = accountKey;
-            authorizationMatches = true;
             authorizationRepaired = true;
         }
 
         if (metadataRepaired || authorizationRepaired) {
-            repairCount.incrementAndGet();
+            logRepair(source, authorizationRepaired, metadataRepaired);
         }
-        logFinalState(
-                source, accountKey, authorization,
-                originalAuthorizationAccessKey, originalMetadataAccessKey,
-                authorizationAccessKey, metadataAccessKey,
-                authorizationMatches, metadataMatches,
-                authorizationRepaired, metadataRepaired,
-                describeAccountChecks(headers));
+        if (isUsable(accountKey) && !isRepairableAuthorization(authorization)
+                && unknownAuthorizationReported.compareAndSet(false, true)) {
+            module.warn("IP location comment authorization uses an unknown scheme; preserved");
+        }
     }
 
-    private void installAccountEvents() throws Throwable {
-        Class<?> topicManagerClass = module.load(classLoader, "u51.f");
-        Class<?> topicClass = module.load(
-                classLoader, "com.bilibili.lib.accounts.subscribe.Topic");
-        Method publish = module.declaredMethod(topicManagerClass, "b", topicClass);
-        module.deoptimizeFeatureMethod(publish);
-        module.addHook("IP location account event diagnostics", publish, hookChain -> {
-            Object result = hookChain.proceed();
-            if (!module.isIpLocationEnabled()) {
-                return result;
-            }
-            Object topic = hookChain.getArg(0);
-            String event = topic instanceof Enum
-                    ? ((Enum<?>) topic).name() : String.valueOf(topic);
-            int generation = accountEventGeneration.incrementAndGet();
-            lastAccountEvent = event;
-            lastDiagnosticState.set(null);
-            String accountKey;
-            try {
-                accountKey = readCurrentAccessKey();
-            } catch (Throwable throwable) {
-                module.error("IP location account event accessKey inspection failed: event="
-                        + event + " generation=" + generation, throwable);
-                return result;
-            }
-            module.info("IP location account event: event=" + event
-                    + " generation=" + generation
-                    + " account={" + credentialSummary(accountKey) + "}");
-            return result;
-        });
-    }
-
-    private void logFinalState(
-            String source, String accountKey, String originalAuthorization,
-            String originalAuthorizationAccessKey, String originalMetadataAccessKey,
-            String authorizationAccessKey, String metadataAccessKey,
-            boolean authorizationMatches, boolean metadataMatches,
-            boolean authorizationRepaired, boolean metadataRepaired, String accountChecks) {
-        boolean repaired = authorizationRepaired || metadataRepaired;
-        boolean healthy = isUsable(accountKey) && authorizationMatches && metadataMatches;
-        boolean anonymous = !isUsable(accountKey) && !isUsable(authorizationAccessKey)
-                && !isUsable(metadataAccessKey) && !isUsable(originalAuthorization);
-        String transport = source.startsWith("okhttp-send ") ? "okhttp" : "grpc";
-        String state = "transport=" + transport + ";account=" + credentialSummary(accountKey)
-                + ";authorization=" + credentialSummary(authorizationAccessKey)
-                + ";metadata=" + credentialSummary(metadataAccessKey)
-                + ";authMatch=" + authorizationMatches
-                + ";metadataMatch=" + metadataMatches
-                + ";checks=" + accountChecks
-                + ";event=" + lastAccountEvent
-                + ";generation=" + accountEventGeneration.get();
-        String previous = lastDiagnosticState.getAndSet(state);
-        int sequence = diagnosticCount.incrementAndGet();
-        boolean changed = !Objects.equals(previous, state);
-        if (!changed && !repaired
-                && !(module.isVerboseLoggingEnabled()
-                && shouldSample(sequence, 10, 100))) {
-            return;
-        }
-        String message = "IP location comment authentication: source=" + source
-                + " status=" + (anonymous ? "ANONYMOUS"
-                        : healthy ? "CONSISTENT" : "MISMATCH")
-                + " " + accountChecks
-                + " account={" + credentialSummary(accountKey) + "}"
-                + " before={authorization=" + authorizationSummary(originalAuthorization)
-                + ",authorizationKey="
-                + credentialSummary(originalAuthorizationAccessKey)
-                + ",metadata=" + credentialSummary(originalMetadataAccessKey) + "}"
-                + " after={authorization="
-                + credentialSummary(authorizationAccessKey)
-                + ",metadata=" + credentialSummary(metadataAccessKey) + "}"
-                + " match={authorization=" + authorizationMatches
-                + ",metadata=" + metadataMatches + "}"
-                + " repaired={authorization=" + authorizationRepaired
-                + ",metadata=" + metadataRepaired + "}"
-                + " accountEvent=" + lastAccountEvent
-                + " generation=" + accountEventGeneration.get()
-                + " repairs=" + repairCount.get()
-                + " sample=" + sequence;
-        if ((healthy || anonymous) && !repaired) {
-            module.info(message);
-        } else {
-            module.warn(message);
+    private void logRepair(String source, boolean authorization, boolean metadata) {
+        int repairs = repairCount.incrementAndGet();
+        if (repairs <= 10 || repairs % 100 == 0) {
+            module.warn("IP location comment credentials repaired: source=" + source
+                    + " authorization=" + authorization + " metadata=" + metadata
+                    + " repair=" + repairs);
         }
     }
 
     private String readCurrentAccessKey() throws Throwable {
+        // Read live state on each request so token refreshes and account switches need no cache.
         Context context = HostApplication.get();
         if (context == null) {
             return null;
@@ -271,27 +155,6 @@ final class CommentAuthCoordinator {
         Object account = module.invoke(accountInstance, null, context);
         return account == null ? null
                 : stringValue(module.invoke(accountAccessKey, account));
-    }
-
-    private String describeAccountChecks(MossTransportHooks.Headers headers) {
-        try {
-            Context context = HostApplication.get();
-            if (context == null) {
-                return "localExpiry=unknown routeMidMatches=unknown";
-            }
-            Object account = module.invoke(accountInstance, null, context);
-            long expiry = ((Number) module.invoke(accountExpiry, account)).longValue();
-            long mid = ((Number) module.invoke(accountMid, account)).longValue();
-            String routeMid = headers.ascii("x-bili-mid");
-            String expiryState = expiry <= 0 ? "unknown"
-                    : expiry <= System.currentTimeMillis() / 1000 ? "expired" : "future";
-            String routeState = !isUsable(routeMid) ? "absent"
-                    : mid <= 0 ? "unknown" : String.valueOf(routeMid.equals(String.valueOf(mid)));
-            // Local expiry and matching identifiers do not prove server-side authentication.
-            return "localExpiry=" + expiryState + " routeMidMatches=" + routeState;
-        } catch (Throwable ignored) {
-            return "localExpiry=unknown routeMidMatches=unknown";
-        }
     }
 
     private String readMetadataAccessKey(byte[] source) throws Throwable {
@@ -311,37 +174,6 @@ final class CommentAuthCoordinator {
         return !isUsable(value) || value.startsWith(AUTH_PREFIX);
     }
 
-    private static String authorizationSummary(String authorization) {
-        if (!isUsable(authorization)) {
-            return "empty";
-        }
-        if (!authorization.startsWith(AUTH_PREFIX)) {
-            return "other-scheme,len=" + authorization.length();
-        }
-        return credentialSummary(extractAuthorizationAccessKey(authorization));
-    }
-
-    private static String credentialSummary(String value) {
-        if (!isUsable(value)) {
-            return "empty";
-        }
-        return "len=" + value.length() + ",sha256=" + fingerprint(value);
-    }
-
-    private static String fingerprint(String value) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder(12);
-            for (int i = 0; i < 6; i++) {
-                result.append(String.format("%02x", digest[i] & 0xff));
-            }
-            return result.toString();
-        } catch (Throwable ignored) {
-            return "unavailable";
-        }
-    }
-
     private static boolean isUsable(String value) {
         return value != null && !value.isEmpty();
     }
@@ -354,10 +186,6 @@ final class CommentAuthCoordinator {
         return value == null ? "null" : value.getClass().getName();
     }
 
-    private static boolean shouldSample(int sequence, int initialCount, int interval) {
-        return sequence <= initialCount || sequence % interval == 0;
-    }
-
     @FunctionalInterface
     interface ScopeProvider {
         String currentCommentSource();
@@ -365,15 +193,10 @@ final class CommentAuthCoordinator {
 
     static final class MetadataRewrite {
         final byte[] bytes;
-        final String originalState;
-        final String rewrittenState;
         final boolean changed;
 
-        MetadataRewrite(
-                byte[] bytes, String originalState, String rewrittenState, boolean changed) {
+        MetadataRewrite(byte[] bytes, boolean changed) {
             this.bytes = bytes;
-            this.originalState = originalState;
-            this.rewrittenState = rewrittenState;
             this.changed = changed;
         }
     }

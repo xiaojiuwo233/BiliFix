@@ -2,7 +2,6 @@ package com.xjw.bilifix.in.feature.location;
 
 import android.content.Context;
 import android.net.Uri;
-import android.os.SystemClock;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
@@ -12,14 +11,12 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Supplies a compatible request identity needed by the host's existing IP location UI. */
@@ -97,23 +94,9 @@ public final class IpLocationHooks {
     private final AtomicInteger transportLogCount = new AtomicInteger();
     private final AtomicInteger transportRewriteLogCount = new AtomicInteger();
     private final AtomicInteger transportRepairLogCount = new AtomicInteger();
-    private final AtomicBoolean captureNextHeaderDump = new AtomicBoolean(true);
-    private final AtomicInteger headerDumpLogCount = new AtomicInteger();
-    private final AtomicInteger requestBodyLogCount = new AtomicInteger();
-    private final AtomicInteger commentHitLogCount = new AtomicInteger();
-    private final AtomicInteger commentMissLogCount = new AtomicInteger();
-    private final AtomicInteger profileLogCount = new AtomicInteger();
-    private final AtomicInteger mainListLogCount = new AtomicInteger();
     private final AtomicInteger profileFilterLogCount = new AtomicInteger();
     private final Set<String> observedTabParams =
             Collections.synchronizedSet(new HashSet<>());
-    private final AtomicBoolean diagnosticsInstalled = new AtomicBoolean(false);
-    private final Map<ScopeKind, Boolean> probeLocationsAvailable =
-            new EnumMap<>(ScopeKind.class);
-    private final Map<ScopeKind, Long> probeLastAvailableUptime =
-            new EnumMap<>(ScopeKind.class);
-    private final long installedUptimeMs = SystemClock.elapsedRealtime();
-    private volatile CommentAuthCoordinator commentAuth;
 
     public IpLocationHooks(HookApi module, ClassLoader classLoader) {
         this.module = module;
@@ -123,8 +106,6 @@ public final class IpLocationHooks {
     public void install() {
         installGroup("profile and REST comment request identity", this::installRestIdentityHooks);
         installGroup("Moss comment request identity", this::installMossIdentityHooks);
-        installGroup("profile location state probe", this::installProfileHeaderTagDiagnostics);
-        installGroup("comment location state probe", this::installMainListDiagnostics);
         installGroup("profile response filter", this::installProfileResponseFilter);
     }
 
@@ -133,19 +114,6 @@ public final class IpLocationHooks {
             return module.isIpLocationEnabled() || module.isSpaceDomesticModulesEnabled();
         }
         return module.isIpLocationEnabled();
-    }
-
-    public void installDiagnostics() {
-        if (!diagnosticsInstalled.compareAndSet(false, true)) {
-            return;
-        }
-        if (!module.isVerboseLoggingEnabled()) {
-            module.info("IP location UI diagnostics skipped: verboseLogging=false; "
-                    + "request and response state probes remain enabled");
-            return;
-        }
-        installGroup("comment response diagnostics", this::installCommentDiagnostics);
-        installGroup("profile bottom-tag diagnostics", this::installProfileBottomTagDiagnostics);
     }
 
     private void installRestIdentityHooks() throws Throwable {
@@ -237,7 +205,6 @@ public final class IpLocationHooks {
         } catch (Throwable throwable) {
             module.error("IP location comment authentication unavailable", throwable);
         }
-        commentAuth = resolvedAuth;
         CommentAuthCoordinator authForMetadata = resolvedAuth;
 
         ProtoRewriter metadataIdentity = new ProtoIdentityRewriter(
@@ -249,8 +216,8 @@ public final class IpLocationHooks {
                             authForMetadata.rewriteMetadata(source);
                     return new ProtoRewriteResult(
                             rewrite.bytes,
-                            rewrite.originalState,
-                            rewrite.rewrittenState,
+                            "accessKey=unchanged",
+                            rewrite.changed ? "accessKey=updated" : "accessKey=unchanged",
                             rewrite.changed);
                 });
         ProtoIdentityRewriter device = new ProtoIdentityRewriter(
@@ -270,7 +237,7 @@ public final class IpLocationHooks {
         installProtoRewriteHook("IP location Moss Fawkes", createFawkes, fawkes);
         if (resolvedAuth != null) {
             CommentAuthCoordinator auth = resolvedAuth;
-            installMossSubgroup("comment authentication diagnostics and repair",
+            installMossSubgroup("comment authentication repair",
                     () -> auth.install(metadataFactoryClass));
         }
 
@@ -304,7 +271,6 @@ public final class IpLocationHooks {
                 () -> installEncodedMossHeaderHooks(
                         metadataFactoryClass, metadata, device, fawkes));
 
-        MossHeaderDiagnostics diagnostics = createHeaderDiagnostics();
         MossTransportHooks transport = new MossTransportHooks(module, classLoader,
                 IpLocationHooks::isCommentReadRpc, (source, headers) ->
                 withScope(ScopeKind.COMMENT_RPC, source, () -> {
@@ -312,9 +278,8 @@ public final class IpLocationHooks {
                     rewriteOutgoingHeader(headers, "x-bili-device-bin", device, source);
                     rewriteOutgoingHeader(headers, "x-bili-fawkes-req-bin", fawkes, source);
                     if (authForMetadata != null) {
-                        authForMetadata.inspectAndRepairFinalHeaders(source, headers);
+                        authForMetadata.repairFinalHeaders(source, headers);
                     }
-                    logHeaderDump(diagnostics, headers, source);
                     return null;
                 }));
         installMossSubgroup("gRPC outgoing header check", transport::installGrpc);
@@ -380,35 +345,6 @@ public final class IpLocationHooks {
                 });
     }
 
-    private MossHeaderDiagnostics createHeaderDiagnostics() {
-        try {
-            return new MossHeaderDiagnostics(module, classLoader);
-        } catch (Throwable throwable) {
-            module.error("IP location full header diagnostics unavailable", throwable);
-            return null;
-        }
-    }
-
-    private void logHeaderDump(MossHeaderDiagnostics diagnostics,
-            MossTransportHooks.Headers headers, String source) {
-        if (diagnostics == null) {
-            return;
-        }
-        boolean capture = source.endsWith("/MainList")
-                && captureNextHeaderDump.getAndSet(false);
-        if (!capture && !module.isVerboseLoggingEnabled()) {
-            return;
-        }
-        int sequence = headerDumpLogCount.incrementAndGet();
-        if (!capture && !shouldSample(sequence, 3, 50)) {
-            return;
-        }
-        for (String line : diagnostics.describe(headers)) {
-            module.info("IP location request header: source=" + source
-                    + " sample=" + sequence + " " + line);
-        }
-    }
-
     private void rewriteOutgoingHeader(MossTransportHooks.Headers headers,
             String name, ProtoRewriter rewriter, String source) throws Throwable {
         byte[] original = headers.binary(name);
@@ -419,9 +355,11 @@ public final class IpLocationHooks {
         if (rewritten.changed) {
             headers.binary(name, rewritten.bytes);
             int repairs = transportRepairLogCount.incrementAndGet();
-            module.warn("IP location outgoing identity repaired: source=" + source
-                    + " header=" + name + " oldIdentity=" + rewritten.originalIdentity
-                    + " newIdentity=" + rewritten.rewrittenIdentity + " repair=" + repairs);
+            if (shouldSample(repairs, 10, 100)) {
+                module.warn("IP location outgoing identity repaired: source=" + source
+                        + " header=" + name + " oldIdentity=" + rewritten.originalIdentity
+                        + " newIdentity=" + rewritten.rewrittenIdentity + " repair=" + repairs);
+            }
         }
     }
 
@@ -585,59 +523,10 @@ public final class IpLocationHooks {
             if (currentCommentSource() != null) {
                 return hookChain.proceed();
             }
-            logCommentRequestBody(fullMethodName, hookChain.getArg(1));
             logTargetRequest(ScopeKind.COMMENT_RPC, "Moss " + fullMethodName);
             return withScope(ScopeKind.COMMENT_RPC,
                     "Moss " + fullMethodName, hookChain::proceed);
         });
-    }
-
-    private void logCommentRequestBody(String methodName, Object request) {
-        if (request == null || !methodName.endsWith("/MainList")) {
-            return;
-        }
-        int sequence = requestBodyLogCount.incrementAndGet();
-        if (sequence > 3
-                && !(module.isVerboseLoggingEnabled() && shouldSample(sequence, 10, 50))) {
-            return;
-        }
-        try {
-            Class<?> type = request.getClass();
-            Object pagination = invokeGetter(type, request, "getPagination");
-            Object wordSearch = invokeGetter(type, request, "getWordSearchParam");
-            Object extra = invokeGetter(type, request, "getExtra");
-            Object adExtra = invokeGetter(type, request, "getAdExtra");
-            Object offset = invokeGetter(pagination.getClass(), pagination, "getOffset");
-            String message = "IP location MainList request:"
-                    + " oid=" + invokeGetter(type, request, "getOid")
-                    + " type=" + invokeGetter(type, request, "getType")
-                    + " rpid=" + invokeGetter(type, request, "getRpid")
-                    + " seekRpid=" + invokeGetter(type, request, "getSeekRpid")
-                    + " mode=" + invokeGetter(type, request, "getModeValue")
-                    + " extra={" + MossHeaderDiagnostics.sensitiveSummary(extra) + "}"
-                    + " adExtra={" + MossHeaderDiagnostics.sensitiveSummary(adExtra) + "}"
-                    + " filterTagLength="
-                    + textLength(invokeGetter(type, request, "getFilterTagName"))
-                    + " recallCount="
-                    + invokeGetter(type, request, "getClientRecallRpidsCount")
-                    + " pagination=" + invokeGetter(type, request, "hasPagination")
-                    + " offset={" + MossHeaderDiagnostics.sensitiveSummary(offset) + "}"
-                    + " wordSearch=" + invokeGetter(type, request, "hasWordSearchParam")
-                    + " shownCount=" + invokeGetter(
-                            wordSearch.getClass(), wordSearch, "getShownCount")
-                    + " sample=" + sequence;
-            module.info(message);
-        } catch (Throwable throwable) {
-            module.error("IP location MainList request diagnostics failed", throwable);
-        }
-    }
-
-    private Object invokeGetter(Class<?> type, Object target, String name) throws Throwable {
-        return module.invoke(module.publicMethod(type, name), target);
-    }
-
-    private static int textLength(Object value) {
-        return value == null ? 0 : String.valueOf(value).length();
     }
 
     private void installMossGrpcTransportScopes(Method descriptorName) throws Throwable {
@@ -735,93 +624,6 @@ public final class IpLocationHooks {
             logTargetRequest(ScopeKind.COMMENT_RPC, source);
             logFinalTransport("downgrade-okhttp", source);
             return withScope(ScopeKind.COMMENT_RPC, source, hookChain::proceed);
-        });
-    }
-
-    private void installMainListDiagnostics() throws Throwable {
-        Class<?> replyClass = module.load(classLoader,
-                "com.bapis.bilibili.main.community.reply.v1.MainListReply");
-        Class<?> replyInfoClass = module.load(classLoader,
-                "com.bapis.bilibili.main.community.reply.v1.ReplyInfo");
-        Class<?> replyControlClass = module.load(classLoader,
-                "com.bapis.bilibili.main.community.reply.v1.ReplyControl");
-        Class<?> subjectControlClass = module.load(classLoader,
-                "com.bapis.bilibili.main.community.reply.v1.SubjectControl");
-        Class<?> paginationClass = module.load(classLoader,
-                "com.bapis.bilibili.pagination.FeedPaginationReply");
-        Class<?> converterClass = module.load(classLoader,
-                "com.bilibili.app.comment3.data.source.v1.b");
-        Class<?> searchWordHelperClass = module.load(classLoader,
-                "com.bilibili.app.comment3.utils.q");
-
-        Method convert = module.declaredMethod(converterClass, "m0",
-                replyClass, long.class, searchWordHelperClass, boolean.class);
-        Method getRepliesCount = module.publicMethod(replyClass, "getRepliesCount");
-        Method getRepliesList = module.publicMethod(replyClass, "getRepliesList");
-        Method getTopRepliesCount = module.publicMethod(replyClass, "getTopRepliesCount");
-        Method getModeValue = module.publicMethod(replyClass, "getModeValue");
-        Method getSubjectControl = module.publicMethod(replyClass, "getSubjectControl");
-        Method getSubjectCount = module.publicMethod(subjectControlClass, "getCount");
-        Method hasPaginationReply = module.publicMethod(replyClass, "hasPaginationReply");
-        Method getPaginationReply = module.publicMethod(replyClass, "getPaginationReply");
-        Method getPaginationEndText = module.publicMethod(replyClass,
-                "getPaginationEndText");
-        Method getPrevOffset = module.publicMethod(paginationClass, "getPrevOffset");
-        Method getNextOffset = module.publicMethod(paginationClass, "getNextOffset");
-        Method getReplyControl = module.publicMethod(replyInfoClass, "getReplyControl");
-        Method getLocation = module.publicMethod(replyControlClass, "getLocation");
-
-        module.deoptimizeFeatureMethod(convert);
-        module.addHook("IP location MainList response diagnostics", convert, hookChain -> {
-            if (module.isIpLocationEnabled()) {
-                Object reply = hookChain.getArg(0);
-                int replies = ((Number) module.invoke(getRepliesCount, reply)).intValue();
-                int topReplies = ((Number) module.invoke(
-                        getTopRepliesCount, reply)).intValue();
-                int responseMode = ((Number) module.invoke(getModeValue, reply)).intValue();
-                long subjectCount = ((Number) module.invoke(getSubjectCount,
-                        module.invoke(getSubjectControl, reply))).longValue();
-                boolean hasPagination = (Boolean) module.invoke(
-                        hasPaginationReply, reply);
-                Object pagination = module.invoke(getPaginationReply, reply);
-                String prevOffset = String.valueOf(module.invoke(getPrevOffset, pagination));
-                String nextOffset = String.valueOf(module.invoke(getNextOffset, pagination));
-                String endText = String.valueOf(module.invoke(getPaginationEndText, reply));
-                boolean firstPage = Boolean.TRUE.equals(hookChain.getArg(3));
-                boolean sparseFirstPage = firstPage && replies == 3 && topReplies == 0
-                        && prevOffset.isEmpty() && nextOffset.isEmpty() && endText.isEmpty();
-                LocationSummary locationSummary = inspectMainListLocations(
-                        module.invoke(getRepliesList, reply), getReplyControl, getLocation);
-                if (locationSummary.present + locationSummary.missing > 0) {
-                    reportLocationState(ScopeKind.COMMENT_RPC, locationSummary.present > 0,
-                            "locationsPresent=" + locationSummary.present
-                                    + " locationsMissing=" + locationSummary.missing);
-                }
-                int sequence = mainListLogCount.incrementAndGet();
-                if (sequence <= 3 || sparseFirstPage
-                        || (module.isVerboseLoggingEnabled() && shouldSample(sequence, 10, 50))) {
-                    String message = "IP location MainList response: firstPage=" + firstPage
-                            + " replies=" + replies
-                            + " topReplies=" + topReplies
-                            + " responseMode=" + responseMode
-                            + " subjectCount=" + subjectCount
-                            + " hasPagination=" + hasPagination
-                            + " hasNextPage=" + !nextOffset.isEmpty()
-                            + " prevOffsetLength=" + prevOffset.length()
-                            + " nextOffsetLength=" + nextOffset.length()
-                            + " locationsPresent=" + locationSummary.present
-                            + " locationsMissing=" + locationSummary.missing
-                            + " sampleLocation=" + locationSummary.sample
-                            + " endText=" + endText
-                            + " fawkesPolicy=comment-read-" + COMMENT_MOBI_APP;
-                    if (sparseFirstPage) {
-                        module.warn(message + " sparse-three-reply signature=true");
-                    } else {
-                        module.info(message);
-                    }
-                }
-            }
-            return hookChain.proceed();
         });
     }
 
@@ -942,194 +744,6 @@ public final class IpLocationHooks {
             }
         }
         return dropped;
-    }
-
-    private void reportLocationState(
-            ScopeKind kind, boolean locationsAvailable, String detail) {
-        long uptime = SystemClock.elapsedRealtime() - installedUptimeMs;
-        Boolean previous;
-        Long lastAvailable;
-        synchronized (probeLocationsAvailable) {
-            previous = probeLocationsAvailable.put(kind, locationsAvailable);
-            lastAvailable = probeLastAvailableUptime.get(kind);
-            if (locationsAvailable) {
-                probeLastAvailableUptime.put(kind, uptime);
-            }
-        }
-        if (previous != null && previous == locationsAvailable) {
-            return;
-        }
-        if (kind == ScopeKind.COMMENT_RPC && !locationsAvailable) {
-            captureNextHeaderDump.set(true);
-        }
-        String message = "IP location response state "
-                + (previous == null ? "observed"
-                : locationsAvailable ? "recovered" : "DEGRADED")
-                + ": probe=" + kind.logName
-                + " locationsAvailable=" + locationsAvailable
-                + " " + detail
-                + " configuredIdentity=" + (kind == ScopeKind.PROFILE_REST
-                        ? profileIdentity() : commentIdentity(true))
-                + " appkey=" + appkeyPolicy(kind)
-                + " uptimeMs=" + uptime
-                + " sinceLastAvailableMs="
-                + (lastAvailable == null ? -1 : uptime - lastAvailable)
-                + " transportRepairs=" + transportRepairLogCount.get()
-                + " authRepairs="
-                + (commentAuth == null ? 0 : commentAuth.repairCount());
-        if (locationsAvailable) {
-            module.info(message);
-        } else {
-            module.warn(message);
-        }
-    }
-
-    private LocationSummary inspectMainListLocations(
-            Object value, Method getReplyControl, Method getLocation) throws Throwable {
-        if (!(value instanceof List)) {
-            return new LocationSummary(0, 0, "");
-        }
-        int present = 0;
-        int missing = 0;
-        String sample = "";
-        for (Object reply : (List<?>) value) {
-            Object control = reply == null ? null : module.invoke(getReplyControl, reply);
-            Object locationValue = control == null ? null : module.invoke(getLocation, control);
-            String location = locationValue instanceof String ? (String) locationValue : "";
-            if (location.isEmpty()) {
-                missing++;
-            } else {
-                present++;
-                if (sample.isEmpty()) {
-                    sample = location;
-                }
-            }
-        }
-        return new LocationSummary(present, missing, sample);
-    }
-
-    private void installCommentDiagnostics() throws Throwable {
-        Class<?> rpcControlClass = module.load(classLoader,
-                "com.bapis.bilibili.main.community.reply.v1.ReplyControl");
-        Method getLocation = module.declaredMethod(rpcControlClass, "getLocation");
-        module.addHook("IP location comment RPC response", getLocation, hookChain -> {
-            Object result = hookChain.proceed();
-            logCommentLocation("ReplyControl.getLocation", result);
-            return result;
-        });
-
-        Class<?> commentClass = module.load(classLoader,
-                "com.bilibili.app.comm.comment2.model.BiliComment");
-        Class<?> restControlClass = module.load(classLoader,
-                "com.bilibili.app.comm.comment2.model.BiliComment$ReplyControl");
-        Class<?> viewModelClass = module.load(classLoader,
-                "com.bilibili.app.comm.comment2.comments.viewmodel.t0");
-        Field replyControl = module.declaredField(commentClass, "replyControl");
-        Field restLocation = module.declaredField(restControlClass, "location");
-        Method bindComment = module.declaredMethod(viewModelClass, "N", commentClass);
-        module.addHook("IP location comment2 binding", bindComment, hookChain -> {
-            if (module.isIpLocationEnabled()) {
-                Object comment = hookChain.getArg(0);
-                Object control = comment == null ? null : replyControl.get(comment);
-                logCommentLocation("comment2 binding",
-                        control == null ? null : restLocation.get(control));
-            }
-            return hookChain.proceed();
-        });
-    }
-
-    private void installProfileBottomTagDiagnostics() throws Throwable {
-        Class<?> containerClass = module.load(classLoader,
-                "com.bilibili.app.authorspace.ui.SpaceHeaderBottomTagsContainer");
-        Class<?> tagClass = module.load(classLoader,
-                "com.bilibili.app.authorspace.api.b");
-        Method render = module.declaredMethod(containerClass, "r", List.class);
-        Field type = module.declaredField(tagClass, "b");
-        Field title = module.declaredField(tagClass, "d");
-        module.addHook("IP location profile bottom tags", render, hookChain -> {
-            if (module.isIpLocationEnabled()) {
-                logProfileTags("space_tag_bottom", hookChain.getArg(0), type, title);
-            }
-            return hookChain.proceed();
-        });
-    }
-
-    private void installProfileHeaderTagDiagnostics() throws Throwable {
-        Class<?> containerClass = module.load(classLoader,
-                "com.bilibili.app.authorspace.ui.headerinfo.HeaderInfoMultiLineTags");
-        Class<?> tagClass = module.load(classLoader,
-                "com.bilibili.app.authorspace.api.BiliHeaderTag");
-        Method render = module.declaredMethod(containerClass, "s", List.class);
-        Field type = module.declaredField(tagClass, "type");
-        Field title = module.declaredField(tagClass, "text");
-        module.addHook("IP location profile header tags", render, hookChain -> {
-            if (module.isIpLocationEnabled()) {
-                logProfileTags("space_tag", hookChain.getArg(0), type, title);
-            }
-            return hookChain.proceed();
-        });
-    }
-
-    private void logCommentLocation(String source, Object value) {
-        if (!module.isIpLocationEnabled()) {
-            return;
-        }
-        String location = value instanceof String ? (String) value : null;
-        if (location != null && !location.isEmpty()) {
-            if (shouldSample(commentHitLogCount.incrementAndGet(), 20, 200)) {
-                module.info("IP location received for comment: source=" + source
-                        + " value=" + location);
-            }
-        } else if (shouldSample(commentMissLogCount.incrementAndGet(), 10, 100)) {
-            module.debug("IP location absent from comment response: source=" + source
-                    + " sample=" + commentMissLogCount.get());
-        }
-    }
-
-    private void logProfileTags(String source, Object value, Field type, Field title) {
-        if (!(value instanceof List)) {
-            if (shouldSample(profileLogCount.incrementAndGet(), 20, 100)) {
-                module.debug("IP location profile tags absent: source=" + source
-                        + " value=" + summarize(value));
-            }
-            return;
-        }
-        List<?> tags = (List<?>) value;
-        boolean hasLocation = false;
-        for (Object tag : tags) {
-            try {
-                hasLocation = tag != null && "location".equals(type.get(tag));
-            } catch (Throwable throwable) {
-                module.error("IP location profile tag inspection failed: source=" + source,
-                        throwable);
-                return;
-            }
-            if (hasLocation) {
-                break;
-            }
-        }
-        reportLocationState(ScopeKind.PROFILE_REST, hasLocation,
-                "locationTag=" + hasLocation + " tags=" + tags.size());
-
-        int sequence = profileLogCount.incrementAndGet();
-        if (!shouldSample(sequence, 20, 100)) {
-            return;
-        }
-        for (Object tag : tags) {
-            try {
-                if (tag != null && "location".equals(type.get(tag))) {
-                    module.info("IP location received for profile: source=" + source
-                            + " value=" + title.get(tag));
-                    return;
-                }
-            } catch (Throwable throwable) {
-                module.error("IP location profile tag inspection failed: source=" + source,
-                        throwable);
-                return;
-            }
-        }
-        module.debug("IP location absent from profile tags: source=" + source
-                + " count=" + tags.size());
     }
 
     private ScopeKind classifyRestRequest(String rawUrl, String verb) {
@@ -1352,18 +966,6 @@ public final class IpLocationHooks {
             this.keyFieldName = keyFieldName;
             this.headerName = headerName;
             this.rewriter = rewriter;
-        }
-    }
-
-    private static final class LocationSummary {
-        private final int present;
-        private final int missing;
-        private final String sample;
-
-        private LocationSummary(int present, int missing, String sample) {
-            this.present = present;
-            this.missing = missing;
-            this.sample = sample;
         }
     }
 
