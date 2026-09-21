@@ -72,6 +72,18 @@ public final class VideoDescriptionFreeCopyHooks {
             MotionEvent event = (MotionEvent) eventValue;
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
+                module.ensureFeatureSettings(view.getContext());
+            }
+            if (!module.isCommentFreeCopyEnabled()) {
+                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_UP
+                        || action == MotionEvent.ACTION_CANCEL) {
+                    synchronized (downStates) {
+                        downStates.remove(view);
+                    }
+                }
+                return chain.proceed();
+            }
+            if (action == MotionEvent.ACTION_DOWN) {
                 synchronized (downStates) {
                     downStates.put(view, new DownState(event.getX(), event.getY()));
                 }
@@ -108,11 +120,6 @@ public final class VideoDescriptionFreeCopyHooks {
             if (callbackValue == null
                     || event.getEventTime() - event.getDownTime()
                     <= ViewConfiguration.getLongPressTimeout()) {
-                return chain.proceed();
-            }
-
-            module.ensureFeatureSettings(view.getContext());
-            if (!module.isCommentFreeCopyEnabled()) {
                 return chain.proceed();
             }
 

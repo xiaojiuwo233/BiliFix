@@ -2,6 +2,7 @@ package com.xjw.bilifix.in.feature.live;
 
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -41,6 +42,8 @@ public final class LiveEntranceHooks {
     private volatile List<LiveUser> portalLiveUsers = Collections.emptyList();
     private volatile long portalFetchedAt;
     private volatile WeakReference<Object> lastFollowingViewModel = new WeakReference<>(null);
+    private volatile UpListAccess upListAccess;
+    private CachedLiveItems cachedLiveItems;
 
     public LiveEntranceHooks(
             HookApi module, ClassLoader classLoader, DexSymbolResolver symbolResolver) {
@@ -52,7 +55,7 @@ public final class LiveEntranceHooks {
     public void install() {
         installGroup("following live coordinator", this::installFollowingCoordinatorHook);
         installGroup("following live model restore", this::installFollowingModelRestoreHook);
-        mainHandler.postDelayed(this::refreshLivePortalIfNeeded, 2_000L);
+        if (upListAccess != null) mainHandler.postDelayed(this::refreshLivePortalIfNeeded, 2_000L);
     }
 
     private void installFollowingCoordinatorHook() throws Throwable {
@@ -61,9 +64,9 @@ public final class LiveEntranceHooks {
         Method buildMethod = findFollowingBuildMethod(viewModel);
         module.deoptimizeFeatureMethod(buildMethod);
         module.addHook("following live coordinator", buildMethod, chain -> {
-            lastFollowingViewModel = new WeakReference<>(chain.getThisObject());
             module.ensureFeatureSettings(currentApplication());
             if (module.isModernLiveEnabled()) {
+                lastFollowingViewModel = new WeakReference<>(chain.getThisObject());
                 refreshLivePortalIfNeeded();
             }
             return chain.proceed();
@@ -149,6 +152,8 @@ public final class LiveEntranceHooks {
                         + modelClass.getName());
             }
         }
+        upListAccess = new UpListAccess(upListClass, module.load(classLoader,
+                "com.bapis.bilibili.app.dynamic.v2.UpListItem"));
         module.addHook("following live model restore", constructor, chain -> {
             module.ensureFeatureSettings(currentApplication());
             if (!module.isModernLiveEnabled()) {
@@ -186,36 +191,35 @@ public final class LiveEntranceHooks {
             return original;
         }
         try {
-            Object originalItemsValue = invokeNoArg(original, "getListList");
+            UpListAccess access = upListAccess;
+            if (access == null) return original;
+            Object originalItemsValue = access.getList.invoke(original);
             if (!(originalItemsValue instanceof List)) {
                 return original;
             }
             List<?> originalItems = (List<?>) originalItemsValue;
-            Object builder = invokeNoArg(original, "toBuilder");
+            Object builder = access.toBuilder.invoke(original);
             if (builder == null) {
                 return original;
             }
-            invokeCompatible(builder, "clearList");
-            Set<Long> liveUids = new HashSet<>();
-            int position = 1;
-            for (LiveUser liveUser : liveUsers) {
-                Object item = buildLiveUpItem(liveUser, position++);
-                if (item != null) {
-                    invokeCompatible(builder, "addList", item);
-                    liveUids.add(liveUser.uid);
-                }
+            access.clearList.invoke(builder);
+            CachedLiveItems live = liveItems(liveUsers, access);
+            for (Object item : live.items) {
+                access.addList.invoke(builder, item);
             }
             for (Object item : originalItems) {
-                Object uidValue = invokeNoArg(item, "getUid");
+                Object uidValue = item == null ? null : access.getUid.invoke(item);
                 long uid = uidValue instanceof Number ? ((Number) uidValue).longValue() : -1L;
-                if (!liveUids.contains(uid)) {
-                    invokeCompatible(builder, "addList", item);
+                if (!live.uids.contains(uid)) {
+                    access.addList.invoke(builder, item);
                 }
             }
-            invokeCompatible(builder, "setShowLiveNum", liveUids.size());
-            Object patched = invokeNoArg(builder, "build");
-            module.info("following live UP list restored: live=" + liveUids.size()
-                    + " original=" + originalItems.size());
+            access.setShowLiveNum.invoke(builder, live.uids.size());
+            Object patched = access.buildList.invoke(builder);
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("following live UP list restored: live=" + live.uids.size()
+                        + " original=" + originalItems.size());
+            }
             return patched == null ? original : patched;
         } catch (Throwable throwable) {
             module.error("following live UP list restore failed", throwable);
@@ -223,26 +227,23 @@ public final class LiveEntranceHooks {
         }
     }
 
-    private Object buildLiveUpItem(LiveUser liveUser, int position) throws Throwable {
-        Class<?> itemClass = module.load(classLoader,
-                "com.bapis.bilibili.app.dynamic.v2.UpListItem");
-        Object builder = itemClass.getMethod("newBuilder").invoke(null);
-        invokeCompatible(builder, "setFace", liveUser.face);
-        invokeCompatible(builder, "setName", liveUser.name);
-        invokeCompatible(builder, "setUid", liveUser.uid);
-        invokeCompatible(builder, "setPos", (long) position);
-        invokeCompatible(builder, "setUserItemTypeValue", 1);
-        invokeCompatible(builder, "setLiveStateValue", 1);
-        invokeCompatible(builder, "setUri", liveUser.jumpUrl);
-        invokeCompatible(builder, "setLiveCover", liveUser.face);
-        invokeCompatible(builder, "setLiveRcmdReason", "直播中");
-        invokeCompatible(builder, "setPersonalExtra", "{\"uid_type\":1}");
-        return invokeNoArg(builder, "build");
+    private synchronized CachedLiveItems liveItems(List<LiveUser> users, UpListAccess access)
+            throws ReflectiveOperationException {
+        if (cachedLiveItems != null && cachedLiveItems.users == users) return cachedLiveItems;
+        List<Object> items = new ArrayList<>(users.size());
+        Set<Long> uids = new HashSet<>();
+        for (LiveUser user : users) {
+            items.add(access.buildItem(user, items.size() + 1));
+            uids.add(user.uid);
+        }
+        // Cache only this portal snapshot's immutable protobuf items, never native UI models.
+        cachedLiveItems = new CachedLiveItems(users, items, uids);
+        return cachedLiveItems;
     }
 
     private void refreshLivePortalIfNeeded() {
         module.ensureFeatureSettings(currentApplication());
-        if (!module.isModernLiveEnabled()) {
+        if (!module.isModernLiveEnabled() || upListAccess == null) {
             return;
         }
         long now = android.os.SystemClock.elapsedRealtime();
@@ -261,6 +262,7 @@ public final class LiveEntranceHooks {
                         result = requestLivePortal(signed);
                     }
                 }
+                if (!module.isModernLiveEnabled()) return;
                 portalFetchedAt = android.os.SystemClock.elapsedRealtime();
                 if (result.code != 0) {
                     module.warn("following live portal failed: code=" + result.code
@@ -270,9 +272,12 @@ public final class LiveEntranceHooks {
                 List<LiveUser> previous = portalLiveUsers;
                 List<LiveUser> current = Collections.unmodifiableList(
                         new ArrayList<>(result.liveUsers));
-                portalLiveUsers = current;
                 module.info("following live portal loaded: liveCount=" + current.size());
                 if (!sameLiveUsers(previous, current)) {
+                    portalLiveUsers = current;
+                    synchronized (this) {
+                        cachedLiveItems = null;
+                    }
                     mainHandler.post(this::refreshFollowingViewModel);
                 }
             } catch (Throwable throwable) {
@@ -364,6 +369,7 @@ public final class LiveEntranceHooks {
     }
 
     private void refreshFollowingViewModel() {
+        if (!module.isModernLiveEnabled()) return;
         Object viewModel = lastFollowingViewModel.get();
         if (viewModel == null) {
             return;
@@ -444,66 +450,62 @@ public final class LiveEntranceHooks {
         return output.toByteArray();
     }
 
-    private static Object invokeCompatible(Object owner, String name, Object... args)
-            throws Throwable {
-        if (owner == null) {
-            return null;
+    private static final class UpListAccess {
+        final Method getList, toBuilder, clearList, addList, setShowLiveNum, buildList;
+        final Method newItem, buildItem, getUid;
+        final Method setFace, setName, setUid, setPos, setItemType, setLiveState;
+        final Method setUri, setCover, setReason, setExtra;
+
+        UpListAccess(Class<?> listClass, Class<?> itemClass) throws ReflectiveOperationException {
+            getList = listClass.getMethod("getListList");
+            toBuilder = listClass.getMethod("toBuilder");
+            Class<?> listBuilder = listClass.getMethod("newBuilder").invoke(null).getClass();
+            clearList = listBuilder.getMethod("clearList");
+            addList = listBuilder.getMethod("addList", itemClass);
+            setShowLiveNum = listBuilder.getMethod("setShowLiveNum", int.class);
+            buildList = listBuilder.getMethod("build");
+            newItem = itemClass.getMethod("newBuilder");
+            Class<?> itemBuilder = newItem.invoke(null).getClass();
+            buildItem = itemBuilder.getMethod("build");
+            getUid = itemClass.getMethod("getUid");
+            setFace = itemBuilder.getMethod("setFace", String.class);
+            setName = itemBuilder.getMethod("setName", String.class);
+            setUid = itemBuilder.getMethod("setUid", long.class);
+            setPos = itemBuilder.getMethod("setPos", long.class);
+            setItemType = itemBuilder.getMethod("setUserItemTypeValue", int.class);
+            setLiveState = itemBuilder.getMethod("setLiveStateValue", int.class);
+            setUri = itemBuilder.getMethod("setUri", String.class);
+            setCover = itemBuilder.getMethod("setLiveCover", String.class);
+            setReason = itemBuilder.getMethod("setLiveRcmdReason", String.class);
+            setExtra = itemBuilder.getMethod("setPersonalExtra", String.class);
         }
-        for (Method method : owner.getClass().getMethods()) {
-            if (!method.getName().equals(name) || method.getParameterCount() != args.length) {
-                continue;
-            }
-            Class<?>[] parameterTypes = method.getParameterTypes();
-            boolean compatible = true;
-            for (int index = 0; index < parameterTypes.length; index++) {
-                if (!isInvocationCompatible(parameterTypes[index], args[index])) {
-                    compatible = false;
-                    break;
-                }
-            }
-            if (compatible) {
-                method.setAccessible(true);
-                return method.invoke(owner, args);
-            }
+
+        Object buildItem(LiveUser user, int position) throws ReflectiveOperationException {
+            Object builder = newItem.invoke(null);
+            setFace.invoke(builder, user.face);
+            setName.invoke(builder, user.name);
+            setUid.invoke(builder, user.uid);
+            setPos.invoke(builder, (long) position);
+            setItemType.invoke(builder, 1);
+            setLiveState.invoke(builder, 1);
+            setUri.invoke(builder, user.jumpUrl);
+            setCover.invoke(builder, user.face);
+            setReason.invoke(builder, "直播中");
+            setExtra.invoke(builder, "{\"uid_type\":1}");
+            return buildItem.invoke(builder);
         }
-        throw new NoSuchMethodException(owner.getClass().getName() + "." + name
-                + " argc=" + args.length);
     }
 
-    private static boolean isInvocationCompatible(Class<?> parameter, Object value) {
-        if (value == null) {
-            return !parameter.isPrimitive();
-        }
-        if (!parameter.isPrimitive()) {
-            return parameter.isInstance(value);
-        }
-        return (parameter == int.class && value instanceof Integer)
-                || (parameter == long.class && value instanceof Long)
-                || (parameter == boolean.class && value instanceof Boolean)
-                || (parameter == float.class && value instanceof Float)
-                || (parameter == double.class && value instanceof Double)
-                || (parameter == byte.class && value instanceof Byte)
-                || (parameter == short.class && value instanceof Short)
-                || (parameter == char.class && value instanceof Character);
-    }
+    private static final class CachedLiveItems {
+        final List<LiveUser> users;
+        final List<Object> items;
+        final Set<Long> uids;
 
-    private static Object invokeNoArg(Object owner, String name) {
-        if (owner == null) {
-            return null;
+        CachedLiveItems(List<LiveUser> users, List<Object> items, Set<Long> uids) {
+            this.users = users;
+            this.items = items;
+            this.uids = uids;
         }
-        Class<?> type = owner.getClass();
-        while (type != null) {
-            try {
-                Method method = type.getDeclaredMethod(name);
-                method.setAccessible(true);
-                return method.invoke(owner);
-            } catch (NoSuchMethodException ignored) {
-                type = type.getSuperclass();
-            } catch (Throwable ignored) {
-                return null;
-            }
-        }
-        return null;
     }
 
     private void installGroup(String label, ThrowingAction action) {
@@ -516,17 +518,7 @@ public final class LiveEntranceHooks {
     }
 
     private static android.content.Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method method = activityThread.getDeclaredMethod("currentApplication");
-            method.setAccessible(true);
-            Object value = method.invoke(null);
-            return value instanceof android.content.Context
-                    ? (android.content.Context) value
-                    : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private static final class LiveUser {

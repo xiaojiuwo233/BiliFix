@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
@@ -29,6 +30,25 @@ public final class IpLocationHooks {
     private static final String COMMENT_CHANNEL = "master";
     private static final String REPLY_SERVICE = "bilibili.main.community.reply.v1.Reply/";
     private static final String PROFILE_PATH = "/x/v2/space";
+    private static final Map<Integer, WireValue> METADATA_IDENTITY;
+    private static final Map<Integer, WireValue> DEVICE_IDENTITY;
+    private static final Map<Integer, WireValue> FAWKES_IDENTITY;
+
+    static {
+        Map<Integer, WireValue> metadata = new LinkedHashMap<>();
+        metadata.put(2, WireValue.string(COMMENT_MOBI_APP));
+        metadata.put(4, WireValue.varint(COMMENT_BUILD));
+        metadata.put(5, WireValue.string(COMMENT_CHANNEL));
+        METADATA_IDENTITY = Collections.unmodifiableMap(metadata);
+        Map<Integer, WireValue> device = new LinkedHashMap<>();
+        device.put(1, WireValue.varint(COMMENT_APP_ID));
+        device.put(2, WireValue.varint(COMMENT_BUILD));
+        device.put(4, WireValue.string(COMMENT_MOBI_APP));
+        device.put(7, WireValue.string(COMMENT_CHANNEL));
+        device.put(12, WireValue.string(COMMENT_VERSION_NAME));
+        DEVICE_IDENTITY = Collections.unmodifiableMap(device);
+        FAWKES_IDENTITY = Collections.singletonMap(1, WireValue.string(COMMENT_MOBI_APP));
+    }
 
     private static final Set<String> COMMENT_RPC_READ_METHODS = immutableSet(
             "MainList",
@@ -115,6 +135,11 @@ public final class IpLocationHooks {
         module.deoptimizeFeatureMethod(putBinaryHeader);
         module.addHook("6.2.6 final Moss binary identity", putBinaryHeader,
                 hookChain -> {
+                    Object headerValue = hookChain.getArg(0);
+                    if (!(headerValue instanceof String)
+                            || modernIdentityFields((String) headerValue) == null) {
+                        return hookChain.proceed();
+                    }
                     module.ensureFeatureSettings(currentApplication());
                     if (!module.isIpLocationEnabled()) {
                         return hookChain.proceed();
@@ -135,10 +160,8 @@ public final class IpLocationHooks {
                         return hookChain.proceed();
                     }
 
-                    Object headerValue = hookChain.getArg(0);
                     Object bytesValue = hookChain.getArg(1);
-                    if (!(headerValue instanceof String)
-                            || !(bytesValue instanceof byte[])) {
+                    if (!(bytesValue instanceof byte[])) {
                         module.warn("6.2.6 final Moss header has unexpected value: "
                                 + "service=" + service + " method=" + method
                                 + " header=" + summarize(headerValue)
@@ -148,16 +171,16 @@ public final class IpLocationHooks {
 
                     String header = (String) headerValue;
                     byte[] original = (byte[]) bytesValue;
-                    WireRewrite rewrite;
+                    byte[] rewritten;
                     try {
-                        rewrite = rewriteModernIdentityHeader(header, original);
+                        rewritten = rewriteModernIdentityHeader(header, original);
                     } catch (Throwable throwable) {
                         module.error("6.2.6 final Moss header rewrite failed; original "
                                 + "retained: Reply/" + method + " header=" + header,
                                 throwable);
                         return hookChain.proceed();
                     }
-                    if (rewrite == null) {
+                    if (rewritten == original) {
                         return hookChain.proceed();
                     }
 
@@ -165,14 +188,14 @@ public final class IpLocationHooks {
                     if (shouldSample(sequence, 60, 100)) {
                         module.info("6.2.6 final Moss header rewritten: Reply/"
                                 + method + " header=" + header
-                                + " oldIdentity=" + rewrite.oldIdentity
-                                + " newIdentity=" + rewrite.newIdentity
+                                + " oldIdentity=" + describeModernIdentity(header, original)
+                                + " newIdentity=" + describeModernIdentity(header, rewritten)
                                 + " oldBytes=" + original.length
-                                + " newBytes=" + rewrite.bytes.length
+                                + " newBytes=" + rewritten.length
                                 + " sample=" + sequence);
                     }
                     Object[] args = hookChain.getArgs().toArray();
-                    args[1] = rewrite.bytes;
+                    args[1] = rewritten;
                     return hookChain.proceed(args);
                 });
     }
@@ -259,34 +282,30 @@ public final class IpLocationHooks {
         return new Field[] { service, method };
     }
 
-    private WireRewrite rewriteModernIdentityHeader(String header, byte[] source)
-            throws Throwable {
-        LinkedHashMap<Integer, WireValue> replacements = new LinkedHashMap<>();
-        String oldIdentity;
-        String newIdentity;
+    private static Map<Integer, WireValue> modernIdentityFields(String header) {
         if ("x-bili-metadata-bin".equalsIgnoreCase(header)) {
-            oldIdentity = ProtoWire.identity(source, 2, 4, 5, -1, -1);
-            replacements.put(2, WireValue.string(COMMENT_MOBI_APP));
-            replacements.put(4, WireValue.varint(COMMENT_BUILD));
-            replacements.put(5, WireValue.string(COMMENT_CHANNEL));
-            newIdentity = commentIdentity(false);
+            return METADATA_IDENTITY;
         } else if ("x-bili-device-bin".equalsIgnoreCase(header)) {
-            oldIdentity = ProtoWire.identity(source, 4, 2, 7, 1, 12);
-            replacements.put(1, WireValue.varint(COMMENT_APP_ID));
-            replacements.put(2, WireValue.varint(COMMENT_BUILD));
-            replacements.put(4, WireValue.string(COMMENT_MOBI_APP));
-            replacements.put(7, WireValue.string(COMMENT_CHANNEL));
-            replacements.put(12, WireValue.string(COMMENT_VERSION_NAME));
-            newIdentity = commentIdentity(true);
+            return DEVICE_IDENTITY;
         } else if ("x-bili-fawkes-req-bin".equalsIgnoreCase(header)) {
-            oldIdentity = "appkey=" + ProtoWire.stringField(source, 1);
-            replacements.put(1, WireValue.string(COMMENT_MOBI_APP));
-            newIdentity = "appkey=" + COMMENT_MOBI_APP;
-        } else {
-            return null;
+            return FAWKES_IDENTITY;
         }
-        return new WireRewrite(
-                ProtoWire.rewrite(source, replacements), oldIdentity, newIdentity);
+        return null;
+    }
+
+    private static byte[] rewriteModernIdentityHeader(String header, byte[] source) {
+        Map<Integer, WireValue> fields = modernIdentityFields(header);
+        return fields == null ? source : ProtoWire.rewrite(source, fields);
+    }
+
+    private static String describeModernIdentity(String header, byte[] source) {
+        if ("x-bili-metadata-bin".equalsIgnoreCase(header)) {
+            return ProtoWire.identity(source, 2, 4, 5, -1, -1);
+        }
+        if ("x-bili-device-bin".equalsIgnoreCase(header)) {
+            return ProtoWire.identity(source, 4, 2, 7, 1, 12);
+        }
+        return "appkey=" + ProtoWire.stringField(source, 1);
     }
 
     private void installModernKotlinMossScope() throws Throwable {
@@ -304,6 +323,8 @@ public final class IpLocationHooks {
         Field serviceName = module.declaredField(descriptorClass, "b");
         Field methodName = module.declaredField(descriptorClass, "c");
         module.addHook("6.2.6 Kotlin Moss comment RPC", call, hookChain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isIpLocationEnabled()) return hookChain.proceed();
             Object descriptor = hookChain.getArg(0);
             String service = descriptor == null
                     ? ""
@@ -312,10 +333,6 @@ public final class IpLocationHooks {
                     ? ""
                     : String.valueOf(methodName.get(descriptor));
             if (!"Reply".equals(service) || !COMMENT_RPC_READ_METHODS.contains(method)) {
-                return hookChain.proceed();
-            }
-            module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
                 return hookChain.proceed();
             }
             String source = "6.2.6 Kotlin Moss " + service + "/" + method;
@@ -331,6 +348,8 @@ public final class IpLocationHooks {
                 connectionClass, descriptorClass, byte[].class,
                 engineCallbackClass, optionsClass);
         module.addHook("6.2.6 Kotlin Moss concrete engine", engineCall, hookChain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isIpLocationEnabled()) return hookChain.proceed();
             Object descriptor = hookChain.getArg(1);
             String service = descriptor == null
                     ? ""
@@ -339,10 +358,6 @@ public final class IpLocationHooks {
                     ? ""
                     : String.valueOf(methodName.get(descriptor));
             if (!"Reply".equals(service) || !COMMENT_RPC_READ_METHODS.contains(method)) {
-                return hookChain.proceed();
-            }
-            module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
                 return hookChain.proceed();
             }
             String source = "6.2.6 Kotlin Moss engine " + service + "/" + method;
@@ -358,6 +373,8 @@ public final class IpLocationHooks {
                 connectionClass, descriptorClass, continuationImplClass);
         module.addHook("6.2.6 Kotlin Moss common headers scope", getHeaders,
                 hookChain -> {
+                    module.ensureFeatureSettings(currentApplication());
+                    if (!module.isIpLocationEnabled()) return hookChain.proceed();
                     Object descriptor = hookChain.getArg(1);
                     String service = descriptor == null
                             ? ""
@@ -365,16 +382,12 @@ public final class IpLocationHooks {
                     String method = descriptor == null
                             ? ""
                             : String.valueOf(methodName.get(descriptor));
-                    if (module.isIpLocationEnabled()) {
+                    if (module.isVerboseLoggingEnabled()) {
                         module.debug("6.2.6 Kotlin Moss common headers invoked: "
                                 + service + "/" + method);
                     }
                     if (!"Reply".equals(service)
                             || !COMMENT_RPC_READ_METHODS.contains(method)) {
-                        return hookChain.proceed();
-                    }
-                    module.ensureFeatureSettings(currentApplication());
-                    if (!module.isIpLocationEnabled()) {
                         return hookChain.proceed();
                     }
                     String source = "6.2.6 Kotlin Moss headers " + service + "/" + method;
@@ -395,6 +408,8 @@ public final class IpLocationHooks {
         Field grpcRequestMethod = module.declaredField(interceptorEventClass, "b");
         module.addHook("6.2.6 Kotlin Moss common header interceptor", commonHeaderIntercept,
                 hookChain -> {
+                    module.ensureFeatureSettings(currentApplication());
+                    if (!module.isIpLocationEnabled()) return hookChain.proceed();
                     Object context = hookChain.getArg(0);
                     Object request = context == null
                             ? null
@@ -408,10 +423,6 @@ public final class IpLocationHooks {
                             : String.valueOf(methodName.get(descriptor));
                     if (!"Reply".equals(service)
                             || !COMMENT_RPC_READ_METHODS.contains(method)) {
-                        return hookChain.proceed();
-                    }
-                    module.ensureFeatureSettings(currentApplication());
-                    if (!module.isIpLocationEnabled()) {
                         return hookChain.proceed();
                     }
                     String source = "6.2.6 Kotlin Moss common header "
@@ -526,9 +537,11 @@ public final class IpLocationHooks {
             } else if (scope.kind == ScopeKind.PROFILE_REST) {
                 args[1] = PROFILE_MOBI_APP;
             }
-            module.debug("6.2.6 KMetadata identity rewritten: source=" + scope.source
-                    + " mobiApp=" + args[1] + " build=" + args[3]
-                    + " channel=" + args[4]);
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("6.2.6 KMetadata identity rewritten: source=" + scope.source
+                        + " mobiApp=" + args[1] + " build=" + args[3]
+                        + " channel=" + args[4]);
+            }
             return hookChain.proceed(args);
         });
     }
@@ -565,11 +578,14 @@ public final class IpLocationHooks {
         Field verbField = module.declaredField(requestClass, "b");
 
         module.addHook("6.2.6 targeted REST scope", intercept, hookChain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isIpLocationEnabled() && !module.isModernLiveEnabled()) {
+                return hookChain.proceed();
+            }
             Object request = hookChain.getArg(0);
             String rawUrl = request == null ? "" : String.valueOf(urlField.get(request));
             String verb = request == null ? "GET" : String.valueOf(verbField.get(request));
             ScopeKind kind = classifyModernRequest(rawUrl, verb);
-            module.ensureFeatureSettings(currentApplication());
             if (kind == null || !kind.isRest() || !isIdentityEnabled(kind)) {
                 return hookChain.proceed();
             }
@@ -604,9 +620,11 @@ public final class IpLocationHooks {
                 parameters.put("build", String.valueOf(COMMENT_BUILD));
                 parameters.put("channel", COMMENT_CHANNEL);
             }
-            module.debug("6.2.6 IP location REST parameters rewritten: source="
-                    + scope.source + " mobi_app=" + mobiApp
-                    + " build=" + parameters.get("build"));
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("6.2.6 IP location REST parameters rewritten: source="
+                        + scope.source + " mobi_app=" + mobiApp
+                        + " build=" + parameters.get("build"));
+            }
             return result;
         });
     }
@@ -648,8 +666,10 @@ public final class IpLocationHooks {
             parameters.put("mobi_app", PROFILE_MOBI_APP);
             parameters.put("platform", "android");
             parameters.put("appkey", module.invoke(domesticAppKey, null, PROFILE_MOBI_APP));
-            module.debug("6.4 profile REST identity rewritten: interceptor=" + className
-                    + " vmid=" + parameters.get("vmid") + " oldMobiApp=" + original);
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("6.4 profile REST identity rewritten: interceptor=" + className
+                        + " vmid=" + parameters.get("vmid") + " oldMobiApp=" + original);
+            }
             return result;
         });
         return 1;
@@ -692,18 +712,21 @@ public final class IpLocationHooks {
     }
 
     private ScopeKind classifyModernRequest(String rawUrl, String verb) {
-        ScopeKind classified = classifyRestRequest(rawUrl, verb);
-        if (classified != null) {
-            return classified;
-        }
         if (!"GET".equalsIgnoreCase(verb)) {
             return null;
         }
         try {
             Uri uri = Uri.parse(rawUrl);
+            String host = uri.getHost();
             String path = uri.getEncodedPath();
             if (path == null) {
                 return null;
+            }
+            if ("app.bilibili.com".equalsIgnoreCase(host) && PROFILE_PATH.equals(path)) {
+                return ScopeKind.PROFILE_REST;
+            }
+            if ("api.bilibili.com".equalsIgnoreCase(host) && COMMENT_REST_READ_PATHS.contains(path)) {
+                return ScopeKind.COMMENT_REST;
             }
             String lower = path.toLowerCase(java.util.Locale.ROOT);
             if (lower.contains("reply") || lower.contains("comment")) {
@@ -1070,13 +1093,11 @@ public final class IpLocationHooks {
     private void installModernMossCallScope(
             String label, Method callMethod, Field descriptorName) {
         module.addHook(label, callMethod, hookChain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isIpLocationEnabled()) return hookChain.proceed();
             Object descriptor = hookChain.getArg(0);
             String fullMethodName = String.valueOf(descriptorName.get(descriptor));
             if (!isCommentReadRpc(fullMethodName)) {
-                return hookChain.proceed();
-            }
-            module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
                 return hookChain.proceed();
             }
             logTargetRequest(ScopeKind.COMMENT_RPC, "6.2.6 Moss " + fullMethodName);
@@ -1438,6 +1459,7 @@ public final class IpLocationHooks {
     private Object withScope(
             ScopeKind kind, String source, ThrowingSupplier action) throws Throwable {
         RequestScope previous = requestScope.get();
+        if (previous != null && previous.kind == kind) return action.get();
         requestScope.set(new RequestScope(kind, source));
         try {
             return action.get();
@@ -1470,15 +1492,7 @@ public final class IpLocationHooks {
     }
 
     private Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object value = currentApplication.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private void installGroup(String label, ThrowingAction action) {
@@ -1580,18 +1594,6 @@ public final class IpLocationHooks {
         }
     }
 
-    private static final class WireRewrite {
-        private final byte[] bytes;
-        private final String oldIdentity;
-        private final String newIdentity;
-
-        private WireRewrite(byte[] bytes, String oldIdentity, String newIdentity) {
-            this.bytes = bytes;
-            this.oldIdentity = oldIdentity;
-            this.newIdentity = newIdentity;
-        }
-    }
-
     private static final class WireValue {
         private final int wireType;
         private final byte[] bytes;
@@ -1610,6 +1612,20 @@ public final class IpLocationHooks {
 
         private static WireValue varint(long value) {
             return new WireValue(0, null, value);
+        }
+
+        private boolean matches(byte[] source, int start, int end, int actualWireType) {
+            if (wireType != actualWireType) return false;
+            Varint value = ProtoWire.readVarint(source, start);
+            if (wireType == 0) {
+                return value.value == number && value.next - start == ProtoWire.varintSize(number);
+            }
+            if (value.value != bytes.length || end - value.next != bytes.length
+                    || value.next - start != ProtoWire.varintSize(bytes.length)) return false;
+            for (int index = 0; index < bytes.length; index++) {
+                if (source[value.next + index] != bytes[index]) return false;
+            }
+            return true;
         }
 
         private void writeTo(ByteArrayOutputStream output, int fieldNumber) {
@@ -1631,11 +1647,11 @@ public final class IpLocationHooks {
         }
 
         private static byte[] rewrite(
-                byte[] source, LinkedHashMap<Integer, WireValue> replacements) {
+                byte[] source, Map<Integer, WireValue> replacements) {
             if (source == null) {
                 throw new IllegalArgumentException("protobuf source is null");
             }
-            ByteArrayOutputStream output = new ByteArrayOutputStream(source.length + 64);
+            ByteArrayOutputStream output = null;
             Set<Integer> written = new HashSet<>();
             int cursor = 0;
             while (cursor < source.length) {
@@ -1651,18 +1667,41 @@ public final class IpLocationHooks {
                 int fieldEnd = skipValue(source, cursor, wireType);
                 WireValue replacement = replacements.get(fieldNumber);
                 if (replacement == null) {
-                    output.write(source, fieldStart, fieldEnd - fieldStart);
-                } else if (written.add(fieldNumber)) {
-                    replacement.writeTo(output, fieldNumber);
+                    if (output != null) output.write(source, fieldStart, fieldEnd - fieldStart);
+                } else {
+                    boolean first = written.add(fieldNumber);
+                    boolean unchanged = first && cursor - fieldStart == varintSize(tag.value)
+                            && replacement.matches(source, cursor, fieldEnd, wireType);
+                    if (!unchanged && output == null) {
+                        output = new ByteArrayOutputStream(source.length + 64);
+                        output.write(source, 0, fieldStart);
+                    }
+                    if (output != null && first) {
+                        if (unchanged) output.write(source, fieldStart, fieldEnd - fieldStart);
+                        else replacement.writeTo(output, fieldNumber);
+                    }
                 }
                 cursor = fieldEnd;
             }
             for (Map.Entry<Integer, WireValue> replacement : replacements.entrySet()) {
                 if (written.add(replacement.getKey())) {
+                    if (output == null) {
+                        output = new ByteArrayOutputStream(source.length + 64);
+                        output.write(source, 0, source.length);
+                    }
                     replacement.getValue().writeTo(output, replacement.getKey());
                 }
             }
-            return output.toByteArray();
+            return output == null ? source : output.toByteArray();
+        }
+
+        private static int varintSize(long value) {
+            int size = 1;
+            while ((value & ~0x7fL) != 0L) {
+                size++;
+                value >>>= 7;
+            }
+            return size;
         }
 
         private static String identity(

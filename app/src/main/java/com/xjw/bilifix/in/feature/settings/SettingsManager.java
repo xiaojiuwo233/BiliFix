@@ -167,7 +167,7 @@ public final class SettingsManager {
     }
 
     public void ensureFeatureSettings(Context context) {
-        if (context == null) {
+        if (context == null || (loaded && receiverRegistered.get())) {
             return;
         }
         registerReceiver(context);

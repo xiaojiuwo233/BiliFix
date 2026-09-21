@@ -8,6 +8,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -15,10 +17,12 @@ import android.widget.ProgressBar;
 
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Constructor;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -522,7 +526,7 @@ public final class Modern626FeatureHooks {
     }
 
     private void startStorySymbolResolution(Activity activity) {
-        if (activity == null || activity.isFinishing()
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()
                 || !storyResolutionStarted.compareAndSet(false, true)) {
             return;
         }
@@ -559,25 +563,31 @@ public final class Modern626FeatureHooks {
                 .create();
         progressDialog.show();
 
+        Context applicationContext = activity.getApplicationContext();
+        WeakReference<Activity> activityReference = new WeakReference<>(activity);
+        WeakReference<AlertDialog> dialogReference = new WeakReference<>(progressDialog);
+        Handler completionHandler = new Handler(Looper.getMainLooper());
         Thread resolverThread = new Thread(() -> {
             Throwable failure = null;
             try {
-                installStoryEntryHook(activity.getApplicationContext());
+                installStoryEntryHook(applicationContext);
                 storyHooksInstalled.set(true);
                 module.info("hook group ready: modern story entry (DexKit)");
             } catch (Throwable throwable) {
                 failure = throwable;
                 module.error("hook group unavailable: modern story entry (DexKit)", throwable);
             }
-            Throwable finalFailure = failure;
-            activity.runOnUiThread(() -> {
+            boolean failed = failure != null;
+            completionHandler.post(() -> {
+                AlertDialog dialog = dialogReference.get();
                 try {
-                    progressDialog.dismiss();
+                    if (dialog != null) dialog.dismiss();
                 } catch (Throwable ignored) {
                     // The activity may have been recreated while the lookup ran.
                 }
-                if (finalFailure != null && !activity.isFinishing()) {
-                    new AlertDialog.Builder(activity)
+                Activity current = activityReference.get();
+                if (failed && current != null && !current.isFinishing() && !current.isDestroyed()) {
+                    new AlertDialog.Builder(current)
                             .setTitle("失败")
                             .setMessage("未能自动定位竖屏模式入口，请导出 LSPosed 日志并反馈。")
                             .setPositiveButton("知道了", null)
@@ -657,9 +667,8 @@ public final class Modern626FeatureHooks {
         module.deoptimizeFeatureMethod(overseaGate);
 
         module.addHook("TopLeftComponent scoped story redirect", overseaGate, chain -> {
-            if (storyDispatchDepth.get() > 0
-                    && module.isModernStoryMasterEnabled()
-                    && module.isModernStoryEnabled()) {
+            if (module.isModernStoryMasterEnabled()
+                    && module.isModernStoryEnabled() && storyDispatchDepth.get() > 0) {
                 Context context = currentApplication();
                 if (context != null) {
                     try {
@@ -713,7 +722,9 @@ public final class Modern626FeatureHooks {
             String label) throws Throwable {
         if (containsUri(original, uriField, targetUri)
                 || (replacementUri != null && containsUri(original, uriField, replacementUri))) {
-            module.debug("modern " + label + " entry already present");
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("modern " + label + " entry already present");
+            }
             return original;
         }
         Object fallbackResult = module.invoke(fallbackFactory, null);
@@ -728,8 +739,10 @@ public final class Modern626FeatureHooks {
         }
         if (replacementUri != null) {
             uriField.set(candidate, replacementUri);
-            module.debug("modern " + label + " route rewritten: from=" + targetUri
-                    + " to=" + replacementUri);
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("modern " + label + " route rewritten: from=" + targetUri
+                        + " to=" + replacementUri);
+            }
         }
         ArrayList<Object> patched = new ArrayList<>(original.size() + 1);
         patched.add(candidate);
@@ -874,15 +887,7 @@ public final class Modern626FeatureHooks {
     }
 
     private static Context currentApplication() {
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method method = activityThread.getDeclaredMethod("currentApplication");
-            method.setAccessible(true);
-            Object value = method.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private void installGroupOnce(

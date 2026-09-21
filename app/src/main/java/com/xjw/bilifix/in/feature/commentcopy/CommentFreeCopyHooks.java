@@ -74,6 +74,11 @@ public final class CommentFreeCopyHooks {
             if (adapter == null || holder == null || !(positionValue instanceof Number)) {
                 return result;
             }
+            Object viewValue = itemViewField.get(holder);
+            if (!(viewValue instanceof View)) return result;
+            View itemView = (View) viewValue;
+            module.ensureFeatureSettings(itemView.getContext());
+            if (!module.isCommentFreeCopyEnabled()) return result;
             Object itemsValue = itemsField.get(adapter);
             if (!(itemsValue instanceof List)) {
                 return result;
@@ -88,14 +93,11 @@ public final class CommentFreeCopyHooks {
             if (!isCopyAction(action)) {
                 return result;
             }
-            Object viewValue = itemViewField.get(holder);
             Object callback = callbackField.get(adapter);
-            if (!(viewValue instanceof View) || callback == null) {
+            if (callback == null) {
                 module.warn("comment free copy COPY row missing view or callback");
                 return result;
             }
-            View itemView = (View) viewValue;
-            module.ensureFeatureSettings(itemView.getContext());
             int bindSequence = copyBindLogCount.incrementAndGet();
             if (bindSequence <= 20 || bindSequence % 100 == 0) {
                 module.info("comment free copy COPY row bound: position=" + position

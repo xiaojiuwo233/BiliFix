@@ -20,6 +20,7 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 import com.xjw.bilifix.in.core.HostVersion;
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.feature.commentcopy.CommentFreeCopyHooks;
@@ -185,6 +186,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
 
     private void initializeSettingsSafely(Context context, String source) {
         try {
+            if (context instanceof android.app.Application) {
+                HostApplication.remember((android.app.Application) context);
+            }
             registerSettingsReceiver(context);
             ensureSettingsLoaded(context);
             info("settings initialized: source=" + source);
@@ -225,12 +229,8 @@ public final class BiliFixModule extends XposedModule implements HookApi {
 
     private boolean initializeCurrentApplication(String source, boolean reportNotReady) {
         try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod("currentApplication");
-            currentApplication.setAccessible(true);
-            Object application = currentApplication.invoke(null);
-            if (application instanceof Context) {
-                Context context = (Context) application;
+            Context context = HostApplication.get();
+            if (context != null) {
                 registerSettingsReceiver(context);
                 ensureSettingsLoaded(context);
                 info("settings initialized from current application: source=" + source);
@@ -357,7 +357,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public Class<?> load(ClassLoader classLoader, String name) throws ClassNotFoundException {
         Class<?> result = Class.forName(name, false, classLoader);
-        debug("resolved class: " + name + " -> " + result);
+        if (isVerboseLoggingEnabled()) debug("resolved class: " + name + " -> " + result);
         return result;
     }
 
@@ -366,7 +366,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             throws NoSuchMethodException {
         Method method = owner.getDeclaredMethod(name, parameterTypes);
         method.setAccessible(true);
-        debug("resolved method: " + method);
+        if (isVerboseLoggingEnabled()) debug("resolved method: " + method);
         return method;
     }
 
@@ -375,7 +375,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             throws NoSuchMethodException {
         Method method = owner.getMethod(name, parameterTypes);
         method.setAccessible(true);
-        debug("resolved public method: " + method);
+        if (isVerboseLoggingEnabled()) debug("resolved public method: " + method);
         return method;
     }
 
@@ -383,7 +383,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     public Field declaredField(Class<?> owner, String name) throws NoSuchFieldException {
         Field field = owner.getDeclaredField(name);
         field.setAccessible(true);
-        debug("resolved field: " + field);
+        if (isVerboseLoggingEnabled()) debug("resolved field: " + field);
         return field;
     }
 
@@ -400,16 +400,12 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public synchronized void addHook(
             String label, Method method, XposedInterface.Hooker hooker) {
-        XposedInterface.HookHandle handle = hook(method)
-                .setPriority(XposedInterface.PRIORITY_HIGHEST)
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(hooker);
-        hookHandles.add(handle);
-        info("hook installed: " + label + " -> " + method);
+        addHook(label, (Executable) method, hooker);
     }
 
     @Override
-    public void addHook(String label, Executable executable, XposedInterface.Hooker hooker) {
+    public synchronized void addHook(
+            String label, Executable executable, XposedInterface.Hooker hooker) {
         XposedInterface.HookHandle handle = hook(executable)
                 .setPriority(XposedInterface.PRIORITY_HIGHEST)
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
@@ -465,16 +461,17 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             return;
         }
         String processMessage = "[" + processName + "] " + message;
+        try {
+            log(priority, TAG, processMessage, throwable);
+            return;
+        } catch (Throwable ignored) {
+            // Android logcat remains available if framework logging is unavailable.
+        }
         if (throwable == null) {
             Log.println(priority, TAG, processMessage);
         } else {
             Log.println(priority, TAG,
                     processMessage + "\n" + Log.getStackTraceString(throwable));
-        }
-        try {
-            log(priority, TAG, processMessage, throwable);
-        } catch (Throwable ignored) {
-            // Android logcat remains available if framework logging is unavailable.
         }
     }
 

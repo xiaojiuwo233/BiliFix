@@ -7,6 +7,7 @@ import android.view.View;
 
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -53,7 +54,6 @@ public final class ModernStoryEntryHooks {
     private final Set<String> playerVerticalGateLogged = ConcurrentHashMap.newKeySet();
     private final Set<String> playerIconLogged = ConcurrentHashMap.newKeySet();
 
-    private volatile Application application;
     public ModernStoryEntryHooks(
             HookApi module, ClassLoader classLoader, DexSymbolResolver symbolResolver) {
         this.module = module;
@@ -1071,24 +1071,7 @@ public final class ModernStoryEntryHooks {
     }
 
     private Application currentApplication() {
-        Application cached = application;
-        if (cached != null) {
-            return cached;
-        }
-        try {
-            Class<?> activityThread = Class.forName("android.app.ActivityThread");
-            Method currentApplication = activityThread.getDeclaredMethod(
-                    "currentApplication");
-            currentApplication.setAccessible(true);
-            Object application = currentApplication.invoke(null);
-            if (application instanceof Application) {
-                this.application = (Application) application;
-                return this.application;
-            }
-            return null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private void installSubgroup(String label, ThrowingAction action) {

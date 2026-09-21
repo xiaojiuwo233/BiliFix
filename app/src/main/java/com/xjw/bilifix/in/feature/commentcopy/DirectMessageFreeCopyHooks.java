@@ -12,6 +12,7 @@ import android.widget.TextView;
 
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.HostApplication;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -85,6 +86,8 @@ public final class DirectMessageFreeCopyHooks {
                     + " contentMethod=" + getContentString.getName());
 
             module.addHook("direct-message free copy operation", operate, chain -> {
+                module.ensureFeatureSettings(currentApplication());
+                if (!module.isCommentFreeCopyEnabled()) return chain.proceed();
                 Object callback = chain.getThisObject();
                 Object labelValue = chain.getArg(0);
                 String copyLabel = copyLabelField.get(callback) instanceof String
@@ -146,6 +149,8 @@ public final class DirectMessageFreeCopyHooks {
                     + " copyValue="
                     + copySymbols.getValue().getReturnType().getName());
             module.addHook("direct-message Compose COPY dispatch", dispatch, chain -> {
+                module.ensureFeatureSettings(currentApplication());
+                if (!module.isCommentFreeCopyEnabled()) return chain.proceed();
                 Object menuItem = chain.getArg(0);
                 Object item = menuItem == null ? null : extractMenuItem(menuItem);
                 if (item == null || !copySymbols.copyItemClass().isInstance(item)) {
@@ -379,15 +384,7 @@ public final class DirectMessageFreeCopyHooks {
     }
 
     private static Context currentApplication() {
-        try {
-            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
-            Method method = activityThreadClass.getDeclaredMethod("currentApplication");
-            method.setAccessible(true);
-            Object value = method.invoke(null);
-            return value instanceof Context ? (Context) value : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return HostApplication.get();
     }
 
     private static Method findOperateMethod(Class<?> callbackClass)
