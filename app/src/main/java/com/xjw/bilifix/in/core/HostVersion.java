@@ -18,6 +18,7 @@ public final class HostVersion {
     private static final long VERSION_CODE_640_INITIAL = 9_100_100L;
     private static final long VERSION_CODE_640_PATCH = 9_100_300L;
     private static final long VERSION_CODE_650 = 9_110_200L;
+    private static final long VERSION_CODE_660 = 9_130_200L;
     private static final String MODERN_SENTINEL =
             "tv.danmaku.bili.khomeapi.service.HomeTabServiceKt";
 
@@ -93,6 +94,10 @@ public final class HostVersion {
         return VERSION_CODE_650 == versionCode && "6.5.0".equals(versionName);
     }
 
+    public boolean isExact660() {
+        return VERSION_CODE_660 == versionCode && "6.6.0".equals(versionName);
+    }
+
     public boolean isModern630OrNewer() {
         return versionCode >= VERSION_CODE_630_ROUTING;
     }
@@ -101,8 +106,14 @@ public final class HostVersion {
         return versionCode >= VERSION_CODE_640_INITIAL;
     }
 
+    /** Versions with a verified synchronous Story gate path. */
     public boolean isSupportedModernHost() {
         return isExact626() || isExact630() || isExact640() || isExact650();
+    }
+
+    /** Versions whose user-facing features have been tested, including DexKit-resolved hosts. */
+    public boolean isRecognizedCompatibleHost() {
+        return isSupportedModernHost() || isExact660();
     }
 
     public boolean prefersSemanticSymbols() {
