@@ -9,7 +9,7 @@
 
 ## 兼容性
 
-- 支持哔哩哔哩国际版 `(com.bilibili.app.in)` 6.2.6 ~ 6.6.0
+- 支持哔哩哔哩国际版 `(com.bilibili.app.in)` 6.2.6 ~ 6.7.1
 - Xposed API 101 或更高版本
 
 ## 功能
