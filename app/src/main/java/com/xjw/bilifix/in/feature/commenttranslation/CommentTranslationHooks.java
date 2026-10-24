@@ -307,7 +307,6 @@ public final class CommentTranslationHooks {
         }
         for (Method target : longPressMethods) {
             target.setAccessible(true);
-            boolean deoptimized = module.deoptimizeFeatureMethod(target);
             module.addHook("comment translation long press "
                             + handlerClass.getSimpleName() + "." + target.getName(),
                     target, chain -> {
@@ -330,8 +329,7 @@ public final class CommentTranslationHooks {
                             + " bridge=" + target.getName());
                     return withPendingContext(context, chain::proceed);
                 });
-            module.info("comment translation long-press bridge ready: method="
-                    + target + " deoptimized=" + deoptimized);
+            module.info("comment translation long-press bridge ready: method=" + target);
         }
     }
 
@@ -343,7 +341,6 @@ public final class CommentTranslationHooks {
                 classLoader, "com.bilibili.app.comment3.data.state.ThemeMode");
         Method configureItems = module.declaredMethod(
                 dialogClass, "Gx", List.class, themeModeClass);
-        module.deoptimizeFeatureMethod(configureItems);
         module.addHook("comment translation long-press menu injection", configureItems,
                 chain -> {
                     LongPressContext context = pendingLongPress.get();
@@ -386,8 +383,6 @@ public final class CommentTranslationHooks {
                 holderClass, "K3", callbackClass, menuItemClass, View.class);
         Method bindRow = module.declaredMethod(
                 holderClass, "J3", menuItemClass, callbackClass);
-        module.deoptimizeFeatureMethod(click);
-        module.deoptimizeFeatureMethod(bindRow);
         menuHolderItemView = findExactViewField(holderClass.getSuperclass());
         module.addHook("comment translation menu click", click, chain -> {
             Object item = chain.getArg(1);
@@ -454,7 +449,6 @@ public final class CommentTranslationHooks {
 
     private void installOriginalTextCaptureHook(String label, Method setter)
             throws Throwable {
-        boolean deoptimized = module.deoptimizeFeatureMethod(setter);
         module.addHook("comment translation original text capture " + label,
                 setter, chain -> {
                     BindingCapture capture = activeBindingCapture.get();
@@ -478,8 +472,7 @@ public final class CommentTranslationHooks {
                     }
                     return chain.proceed();
                 });
-        module.info("comment translation original text capture ready: setter="
-                + setter + " deoptimized=" + deoptimized);
+        module.info("comment translation original text capture ready: setter=" + setter);
     }
 
     private void installBindingHook(

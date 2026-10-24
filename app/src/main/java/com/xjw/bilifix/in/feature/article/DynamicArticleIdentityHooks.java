@@ -87,7 +87,6 @@ public final class DynamicArticleIdentityHooks {
         Method getOffset = module.publicMethod(requestClass, "getOffset");
         Method getUpdateBaseline = module.publicMethod(
                 requestClass, "getUpdateBaseline");
-        module.deoptimizeFeatureMethod(suspendDynAll);
 
         module.addHook("Dynamic article following suspendDynAll", suspendDynAll, hookChain -> {
             module.ensureFeatureSettings(currentApplication());
@@ -114,7 +113,6 @@ public final class DynamicArticleIdentityHooks {
         Class<?> continuationClass = module.load(classLoader, "kotlin.coroutines.c");
         Method loadRemoteData = module.declaredMethod(
                 modelClass, "u", boolean.class, int.class, continuationClass);
-        module.deoptimizeFeatureMethod(loadRemoteData);
 
         module.addHook("Dynamic article following page load", loadRemoteData,
                 hookChain -> withFollowingFeedScope(
@@ -160,7 +158,6 @@ public final class DynamicArticleIdentityHooks {
                 dynamicListClass, "getHistoryOffset");
         Method getUpdateBaseline = module.publicMethod(
                 dynamicListClass, "getUpdateBaseline");
-        module.deoptimizeFeatureMethod(consumeResponse);
 
         module.addHook("Dynamic article following response", consumeResponse, hookChain -> {
             Object result = hookChain.proceed();
@@ -416,7 +413,6 @@ public final class DynamicArticleIdentityHooks {
         Class<?> replyClass = module.load(
                 classLoader, "com.bapis.bilibili.app.dynamic.v2.DynSpaceRsp");
         Method getItems = module.publicMethod(replyClass, "getListOrBuilderList");
-        module.deoptimizeFeatureMethod(getItems);
 
         module.addHook("Dynamic article DynSpace response", getItems, hookChain -> {
             Object result = hookChain.proceed();

@@ -14,6 +14,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -42,9 +43,13 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private final AtomicBoolean runtimeStateLogged = new AtomicBoolean(false);
     private final SettingsManager settingsManager = new SettingsManager(this);
     private final List<XposedInterface.HookHandle> hookHandles = new ArrayList<>();
+    private final List<Feature> features = new ArrayList<>();
     private volatile Handler mainHandler;
     private volatile SystemShareHooks systemShareHooks;
     private volatile HostVersion hostVersion;
+    private volatile ClassLoader hostClassLoader;
+    private volatile MossHookHub mossHub;
+    private volatile RestHookHub restHub;
 
     private volatile String processName = "unknown";
 
@@ -93,31 +98,110 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             return;
         }
 
+        settingsManager.preload(param.getApplicationInfo());
         installApplicationSettingsHook(classLoader);
-        MossHookHub mossHub = new MossHookHub(this, classLoader);
-        RestHookHub restHub = new RestHookHub(this, classLoader);
-        new WebViewThemeHooks(this, classLoader).install();
-        new CompatFeatureHooks(this, classLoader).install();
-        new PaidEmoticonHooks(this, classLoader, restHub).install();
-        IpLocationHooks locationHooks = new IpLocationHooks(this, classLoader, mossHub, restHub);
+        hostClassLoader = classLoader;
+        mossHub = new MossHookHub(this, classLoader);
+        restHub = new RestHookHub(this, classLoader);
+        registerFeatures(mainProcess);
         if (mainProcess) {
-            new DynamicArticleIdentityHooks(this, classLoader, mossHub).install();
-            new CommentTranslationHooks(this, classLoader).install();
-            new AiSubtitleHooks(this, classLoader, mossHub).install();
-            locationHooks.install();
             settingsManager.installUiHooks(classLoader);
-            SystemShareHooks shareHooks = new SystemShareHooks(this, classLoader);
-            systemShareHooks = shareHooks;
-            shareHooks.install();
-        } else {
-            locationHooks.install();
-            new ArticleHooks(this, classLoader).install();
         }
-        mossHub.install();
-        restHub.install();
+        settingsManager.setChangeListener(() -> installEnabledFeatures("settings-change"));
+        installEnabledFeatures("package-ready");
 
         info("hook installation finished: installed=" + hookHandles.size());
         schedulePostPackageInitialization();
+    }
+
+    private void registerFeatures(boolean mainProcess) {
+        ClassLoader classLoader = hostClassLoader;
+        MossHookHub moss = mossHub;
+        RestHookHub rest = restHub;
+        features.add(new Feature("WebView theme",
+                () -> settingsManager.isRelationFixEnabled()
+                        || settingsManager.isWalletFixEnabled(),
+                () -> new WebViewThemeHooks(this, classLoader).install()));
+        features.add(new Feature("compat fixes",
+                () -> settingsManager.isRegionFixEnabled()
+                        || settingsManager.isRelationFixEnabled()
+                        || settingsManager.isWalletFixEnabled(),
+                () -> new CompatFeatureHooks(this, classLoader, rest).install()));
+        features.add(new Feature("paid emoticon",
+                settingsManager::isPaidEmoticonFixEnabled,
+                () -> new PaidEmoticonHooks(this, classLoader, rest).install()));
+        features.add(new Feature("IP location",
+                () -> settingsManager.isIpLocationEnabled()
+                        || settingsManager.isSpaceDomesticModulesEnabled(),
+                () -> new IpLocationHooks(this, classLoader, moss, rest).install()));
+        if (mainProcess) {
+            features.add(new Feature("dynamic article",
+                    settingsManager::isDynamicArticleFixEnabled,
+                    () -> new DynamicArticleIdentityHooks(this, classLoader, moss).install()));
+            features.add(new Feature("comment translation",
+                    settingsManager::isAiCommentTranslationEnabled,
+                    () -> new CommentTranslationHooks(this, classLoader).install()));
+            features.add(new Feature("AI subtitle",
+                    settingsManager::isAiSubtitleEnabled,
+                    () -> new AiSubtitleHooks(this, classLoader, moss).install()));
+            features.add(new Feature("system share",
+                    settingsManager::isSystemShareEnabled,
+                    () -> {
+                        SystemShareHooks shareHooks = new SystemShareHooks(this, classLoader);
+                        systemShareHooks = shareHooks;
+                        shareHooks.install();
+                        if (HostApplication.get() != null) {
+                            shareHooks.installDeferredCommentHooks();
+                        }
+                    }));
+        } else {
+            features.add(new Feature("article",
+                    settingsManager::isArticleFixEnabled,
+                    () -> new ArticleHooks(this, classLoader).install()));
+        }
+    }
+
+    private synchronized void installEnabledFeatures(String reason) {
+        if (hostClassLoader == null) {
+            return;
+        }
+        int installedBefore = hookHandles.size();
+        int featuresInstalled = 0;
+        for (Feature feature : features) {
+            if (feature.installed || !feature.enabled.getAsBoolean()) {
+                continue;
+            }
+            feature.installed = true;
+            featuresInstalled++;
+            try {
+                feature.installer.run();
+                info("feature installed: " + feature.name + " reason=" + reason);
+            } catch (Throwable throwable) {
+                error("feature installation failed: " + feature.name, throwable);
+            }
+        }
+        if (featuresInstalled == 0) {
+            return;
+        }
+        mossHub.install();
+        restHub.install();
+        info("feature installation pass finished: reason=" + reason
+                + " features=" + featuresInstalled
+                + " hooksAdded=" + (hookHandles.size() - installedBefore)
+                + " hooksTotal=" + hookHandles.size());
+    }
+
+    private static final class Feature {
+        private final String name;
+        private final BooleanSupplier enabled;
+        private final ThrowingAction installer;
+        private boolean installed;
+
+        private Feature(String name, BooleanSupplier enabled, ThrowingAction installer) {
+            this.name = name;
+            this.enabled = enabled;
+            this.installer = installer;
+        }
     }
 
     private void installApplicationSettingsHook(ClassLoader classLoader) {
@@ -294,7 +378,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public Class<?> load(ClassLoader classLoader, String name) throws ClassNotFoundException {
         Class<?> result = Class.forName(name, false, classLoader);
-        debug("resolved class: " + name + " -> " + result);
+        if (settingsManager.isVerboseLoggingEnabled()) {
+            debug("resolved class: " + name + " -> " + result);
+        }
         return result;
     }
 
@@ -303,7 +389,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             throws NoSuchMethodException {
         Method method = owner.getDeclaredMethod(name, parameterTypes);
         method.setAccessible(true);
-        debug("resolved method: " + method);
+        if (settingsManager.isVerboseLoggingEnabled()) {
+            debug("resolved method: " + method);
+        }
         return method;
     }
 
@@ -312,7 +400,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
             throws NoSuchMethodException {
         Method method = owner.getMethod(name, parameterTypes);
         method.setAccessible(true);
-        debug("resolved public method: " + method);
+        if (settingsManager.isVerboseLoggingEnabled()) {
+            debug("resolved public method: " + method);
+        }
         return method;
     }
 
@@ -320,7 +410,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     public Field declaredField(Class<?> owner, String name) throws NoSuchFieldException {
         Field field = owner.getDeclaredField(name);
         field.setAccessible(true);
-        debug("resolved field: " + field);
+        if (settingsManager.isVerboseLoggingEnabled()) {
+            debug("resolved field: " + field);
+        }
         return field;
     }
 

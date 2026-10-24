@@ -107,10 +107,6 @@ public final class WebViewThemeHooks {
         Method buildDefaultRequest = module.declaredMethod(requestKt, "i",
                 Uri.class, Context.class, sceneMode, kotlinFunction,
                 int.class, Object.class);
-        boolean buildDeoptimized = module.deoptimizeFeatureMethod(buildRequest);
-        boolean defaultDeoptimized = module.deoptimizeFeatureMethod(buildDefaultRequest);
-        module.info("Aghanim request builders deoptimized: build=" + buildDeoptimized
-                + " default=" + defaultDeoptimized);
         installAghanimRequestMethodHook("Aghanim initial H5 theme", buildRequest);
         installAghanimRequestMethodHook(
                 "Aghanim default initial H5 theme", buildDefaultRequest);

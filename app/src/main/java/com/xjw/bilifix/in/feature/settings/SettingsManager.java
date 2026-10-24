@@ -8,10 +8,20 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.os.Build;
+import android.util.Xml;
 
 import com.xjw.bilifix.in.core.HookApi;
 
+import org.xmlpull.v1.XmlPullParser;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Owns BiliFix setting state, persistence and cross-process broadcast synchronization. */
@@ -62,6 +72,7 @@ public final class SettingsManager {
 
     private volatile boolean loaded;
     private volatile Snapshot state = Snapshot.defaults();
+    private volatile Runnable changeListener;
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
@@ -77,6 +88,57 @@ public final class SettingsManager {
         this.module = module;
     }
 
+    public void setChangeListener(Runnable listener) {
+        changeListener = listener;
+    }
+
+    /**
+     * 这时还没有 Application，拿不到 Context，只能直接读设置文件，用来决定启动时装哪些功能。
+     * 不要把 loaded 置上，后面有 Context 时仍以 SharedPreferences 为准再读一次。
+     */
+    public void preload(ApplicationInfo applicationInfo) {
+        if (applicationInfo == null || applicationInfo.dataDir == null) {
+            return;
+        }
+        File file = new File(applicationInfo.dataDir,
+                "shared_prefs" + File.separator + SETTINGS_FILE + ".xml");
+        if (!file.isFile()) {
+            module.info("settings preload skipped: file absent, defaults assumed");
+            return;
+        }
+        try (InputStream input = new FileInputStream(file)) {
+            Snapshot snapshot = Snapshot.fromMap(parseBooleanPreferences(input));
+            synchronized (stateLock) {
+                if (!loaded) {
+                    state = snapshot;
+                }
+            }
+            module.info("settings preloaded from file: " + snapshot);
+        } catch (Throwable throwable) {
+            module.error("settings preload failed; defaults assumed until context is ready",
+                    throwable);
+        }
+    }
+
+    private static Map<String, Boolean> parseBooleanPreferences(InputStream input)
+            throws Exception {
+        Map<String, Boolean> values = new HashMap<>();
+        XmlPullParser parser = Xml.newPullParser();
+        parser.setInput(input, StandardCharsets.UTF_8.name());
+        int event = parser.getEventType();
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && "boolean".equals(parser.getName())) {
+                String name = parser.getAttributeValue(null, "name");
+                String value = parser.getAttributeValue(null, "value");
+                if (name != null && value != null) {
+                    values.put(name, Boolean.parseBoolean(value));
+                }
+            }
+            event = parser.next();
+        }
+        return values;
+    }
+
     public void installUiHooks(ClassLoader classLoader) {
         if (!module.hostVersion().isIncompatible()) {
             new SettingsDeepLinkHooks(module).install(classLoader);
@@ -88,6 +150,7 @@ public final class SettingsManager {
         try {
             SharedPreferences preferences = preferences(context);
             Snapshot snapshot;
+            boolean changed;
             // The write, the read-back and the publish must be atomic against ensureLoaded(),
             // which would otherwise republish the snapshot it captured before this write.
             synchronized (stateLock) {
@@ -100,8 +163,9 @@ public final class SettingsManager {
                 // in-memory state below is what every feature hook actually reads.
                 editor.apply();
                 snapshot = Snapshot.fromPreferences(preferences);
-                applyLocked(snapshot, "settings-page");
+                changed = applyLocked(snapshot, "settings-page");
             }
+            notifyChanged(changed);
 
             Intent update = new Intent(SETTINGS_CHANGED_ACTION).setPackage(TARGET_PACKAGE);
             snapshot.putExtras(update);
@@ -128,12 +192,15 @@ public final class SettingsManager {
         if (loaded || context == null) {
             return;
         }
+        boolean changed;
         synchronized (stateLock) {
             if (loaded) {
                 return;
             }
-            apply(Snapshot.fromPreferences(preferences(context)), "shared-preferences");
+            changed = applyLocked(
+                    Snapshot.fromPreferences(preferences(context)), "shared-preferences");
         }
+        notifyChanged(changed);
     }
 
     private SharedPreferences preferences(Context context) {
@@ -152,12 +219,14 @@ public final class SettingsManager {
 
 
     private void apply(Snapshot snapshot, String source) {
+        boolean changed;
         synchronized (stateLock) {
-            applyLocked(snapshot, source);
+            changed = applyLocked(snapshot, source);
         }
+        notifyChanged(changed);
     }
 
-    private void applyLocked(Snapshot snapshot, String source) {
+    private boolean applyLocked(Snapshot snapshot, String source) {
         boolean changed = !loaded || !state.sameAs(snapshot);
         state = snapshot;
         loaded = true;
@@ -165,6 +234,19 @@ public final class SettingsManager {
             module.info("settings applied: source=" + source + " " + snapshot);
         } else if (module.isVerboseLoggingEnabled()) {
             module.debug("settings unchanged: source=" + source + " " + snapshot);
+        }
+        return changed;
+    }
+
+    private void notifyChanged(boolean changed) {
+        Runnable listener = changeListener;
+        if (!changed || listener == null) {
+            return;
+        }
+        try {
+            listener.run();
+        } catch (Throwable throwable) {
+            module.error("settings change listener failed", throwable);
         }
     }
 
@@ -321,6 +403,27 @@ public final class SettingsManager {
                             KEY_SYSTEM_SHARE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_VERBOSE_LOGGING_ENABLED, DEFAULT_FEATURE_ENABLED));
+        }
+
+        static Snapshot fromMap(Map<String, Boolean> values) {
+            return new Snapshot(
+                    valueOf(values, KEY_ARTICLE_FIX_ENABLED),
+                    valueOf(values, KEY_DYNAMIC_ARTICLE_FIX_ENABLED),
+                    valueOf(values, KEY_REGION_FIX_ENABLED),
+                    valueOf(values, KEY_RELATION_FIX_ENABLED),
+                    valueOf(values, KEY_WALLET_FIX_ENABLED),
+                    valueOf(values, KEY_IP_LOCATION_ENABLED),
+                    valueOf(values, KEY_SPACE_DOMESTIC_MODULES_ENABLED),
+                    valueOf(values, KEY_AI_SUBTITLE_ENABLED),
+                    valueOf(values, KEY_AI_COMMENT_TRANSLATION_ENABLED),
+                    valueOf(values, KEY_PAID_EMOTICON_FIX_ENABLED),
+                    valueOf(values, KEY_SYSTEM_SHARE_ENABLED),
+                    valueOf(values, KEY_VERBOSE_LOGGING_ENABLED));
+        }
+
+        private static boolean valueOf(Map<String, Boolean> values, String key) {
+            Boolean value = values.get(key);
+            return value == null ? DEFAULT_FEATURE_ENABLED : value;
         }
 
         /** Values absent from the broadcast fall back to {@code fallback}, never to the default. */

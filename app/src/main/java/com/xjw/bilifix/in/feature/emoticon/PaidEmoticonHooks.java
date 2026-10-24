@@ -137,7 +137,6 @@ public final class PaidEmoticonHooks {
         Field flags = module.declaredField(packageClass, "flags");
         Field added = module.declaredField(flagsClass, "isAdded");
         Field noAccess = module.declaredField(flagsClass, "noAccess");
-        module.deoptimizeFeatureMethod(receivePackages);
 
         module.addHook("Paid emoticon panel package diagnostics", receivePackages,
                 hookChain -> {

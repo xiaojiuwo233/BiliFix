@@ -39,7 +39,6 @@ final class SubtitleFileCompat {
                 classLoader, "com.bilibili.common.chronoscommon.plugins.e");
         Method writeFile = module.declaredMethod(
                 fileConverter, "c", InputStream.class, File.class);
-        module.deoptimizeFeatureMethod(writeFile);
         module.addHook("AI subtitle downloaded file compatibility", writeFile, chain -> {
             Object result = chain.proceed();
             module.ensureFeatureSettings(currentApplication());

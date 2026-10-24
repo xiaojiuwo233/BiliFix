@@ -33,3 +33,7 @@ signing/
 # Operating-system metadata
 .DS_Store
 **/.DS_Store
+
+# agent files
+.claude/
+.codex/

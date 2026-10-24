@@ -173,10 +173,12 @@ public final class IpLocationHooks {
             if (profile) {
                 parameters.put("statistics", PROFILE_STATISTICS);
             }
-            module.debug("IP location REST parameters rewritten: source="
-                    + scope.source + " mobi_app=" + mobiApp
-                    + " build=" + parameters.get("build")
-                    + " appkey=" + APPKEY_POLICY);
+            if (module.isVerboseLoggingEnabled()) {
+                module.debug("IP location REST parameters rewritten: source="
+                        + scope.source + " mobi_app=" + mobiApp
+                        + " build=" + parameters.get("build")
+                        + " appkey=" + APPKEY_POLICY);
+            }
         });
 
         restHub.addUserAgentRewriter(original -> {
@@ -185,7 +187,7 @@ public final class IpLocationHooks {
                 return original;
             }
             String rewritten = rewriteRestUserAgent(original, scope.kind);
-            if (!original.equals(rewritten)) {
+            if (!original.equals(rewritten) && module.isVerboseLoggingEnabled()) {
                 module.debug("IP location REST user agent rewritten: source="
                         + scope.source);
             }
@@ -576,7 +578,6 @@ public final class IpLocationHooks {
                 if (parameters.length != 1 || parameters[0] != spaceClass) {
                     continue;
                 }
-                module.deoptimizeFeatureMethod(candidate);
                 module.addHook("IP location profile response filter", candidate, hookChain -> {
                     // Filtering happens before proceed(): the host reads these while rendering.
                     filterProfileResponse(hookChain.getArg(0), card, spaceTag,
@@ -1009,6 +1010,10 @@ public final class IpLocationHooks {
             }
             Object message = module.invoke(parseFrom, null, (Object) source);
             String originalAppkey = String.valueOf(module.invoke(getAppkey, message));
+            if (COMMENT_MOBI_APP.equals(originalAppkey)) {
+                return new ProtoRewriteResult(
+                        source, "appkey=" + originalAppkey, "appkey=" + COMMENT_MOBI_APP, false);
+            }
             Object builder = module.invoke(toBuilder, message);
             module.invoke(setAppkey, builder, COMMENT_MOBI_APP);
             Object rewrittenMessage = module.invoke(build, builder);

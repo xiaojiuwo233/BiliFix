@@ -53,7 +53,6 @@ final class MossTransportHooks {
         Method methodName = module.declaredMethod(descriptor, "c");
         Method start = module.declaredMethod(call, "e", listener, headers);
         GrpcAccess access = new GrpcAccess(module, loader);
-        module.deoptimizeFeatureMethod(start);
         module.addHook("IP location gRPC outgoing headers", start, chain -> {
             if (module.isIpLocationEnabled()) {
                 try {

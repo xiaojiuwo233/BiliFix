@@ -1,13 +1,15 @@
 package com.xjw.bilifix.in.core;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import io.github.libxposed.api.XposedInterface;
 
@@ -100,7 +102,7 @@ public final class MossHookHub {
 
     private final HookApi module;
     private final ClassLoader classLoader;
-    private final List<UnaryCallScope> unaryCallScopes = new ArrayList<>();
+    private final List<UnaryCallScope> unaryCallScopes = new CopyOnWriteArrayList<>();
     private final Map<Factory, List<FactoryRewriter>> factoryRewriters = new EnumMap<>(Factory.class);
     private final Map<String, List<GrpcCallObserver>> grpcCallObservers = new LinkedHashMap<>();
     private final Map<String, List<HeaderPopulateListener>> headerPopulateListeners =
@@ -108,49 +110,48 @@ public final class MossHookHub {
     private final Map<String, List<OkHttpScope>> okHttpScopes = new LinkedHashMap<>();
     private final Map<Object, String> descriptorNames =
             Collections.synchronizedMap(new WeakHashMap<>());
+    private final Set<String> installedGroups = new HashSet<>();
     private volatile Method descriptorName;
-    private boolean installed;
 
     public MossHookHub(HookApi module, ClassLoader classLoader) {
         this.module = module;
         this.classLoader = classLoader;
     }
 
-    public void addUnaryCallScope(UnaryCallScope scope) {
-        ensureNotInstalled();
+    public synchronized void addUnaryCallScope(UnaryCallScope scope) {
         unaryCallScopes.add(scope);
     }
 
-    public void addFactoryRewriter(Factory factory, FactoryRewriter rewriter) {
-        ensureNotInstalled();
-        factoryRewriters.computeIfAbsent(factory, key -> new ArrayList<>()).add(rewriter);
+    public synchronized void addFactoryRewriter(Factory factory, FactoryRewriter rewriter) {
+        factoryRewriters.computeIfAbsent(factory, key -> new CopyOnWriteArrayList<>())
+                .add(rewriter);
     }
 
-    public void addGrpcCallObserver(String part, GrpcCallObserver observer) {
-        ensureNotInstalled();
+    public synchronized void addGrpcCallObserver(String part, GrpcCallObserver observer) {
         requirePart(part);
-        grpcCallObservers.computeIfAbsent(part, key -> new ArrayList<>()).add(observer);
+        grpcCallObservers.computeIfAbsent(part, key -> new CopyOnWriteArrayList<>())
+                .add(observer);
     }
 
-    public void addHeaderPopulateListener(String part, HeaderPopulateListener listener) {
-        ensureNotInstalled();
+    public synchronized void addHeaderPopulateListener(String part, HeaderPopulateListener listener) {
         requirePart(part);
-        headerPopulateListeners.computeIfAbsent(part, key -> new ArrayList<>()).add(listener);
+        headerPopulateListeners.computeIfAbsent(part, key -> new CopyOnWriteArrayList<>())
+                .add(listener);
     }
 
-    public void addOkHttpScope(String part, OkHttpScope scope) {
-        ensureNotInstalled();
+    public synchronized void addOkHttpScope(String part, OkHttpScope scope) {
         requirePart(part);
-        okHttpScopes.computeIfAbsent(part, key -> new ArrayList<>()).add(scope);
+        okHttpScopes.computeIfAbsent(part, key -> new CopyOnWriteArrayList<>()).add(scope);
     }
 
-    public void install() {
-        installed = true;
+    public synchronized void install() {
+        int before = installedGroups.size();
         if (!unaryCallScopes.isEmpty()) {
             installGroup("Moss unary call scope", this::installUnaryCallHooks);
         }
-        if (!factoryRewriters.isEmpty()) {
-            installGroup("Moss identity factory", this::installFactoryHooks);
+        for (Factory factory : factoryRewriters.keySet()) {
+            installGroup("Moss identity factory [" + factory.label + "]",
+                    () -> installFactoryHook(factory));
         }
         for (String part : grpcCallObservers.keySet()) {
             installGroup("Moss gRPC call registration [" + part + "]",
@@ -164,11 +165,15 @@ public final class MossHookHub {
             installGroup("Moss OkHttp intercept [" + part + "]",
                     () -> installOkHttpHooks(part));
         }
+        if (installedGroups.size() == before) {
+            return;
+        }
         module.info("Moss shared hooks installed: unaryScopes=" + unaryCallScopes.size()
                 + " factoryRewriters=" + countValues(factoryRewriters)
                 + " grpcObservers=" + countValues(grpcCallObservers)
                 + " populateListeners=" + countValues(headerPopulateListeners)
-                + " okHttpScopes=" + countValues(okHttpScopes));
+                + " okHttpScopes=" + countValues(okHttpScopes)
+                + " groups=" + installedGroups.size());
     }
 
     private void installUnaryCallHooks() throws Throwable {
@@ -184,8 +189,6 @@ public final class MossHookHub {
         Method blockingUnaryCall = module.declaredMethod(serviceClass, "blockingUnaryCall",
                 descriptorClass, generatedMessageClass, httpRuleClass);
         resolveDescriptorName(descriptorClass);
-        module.deoptimizeFeatureMethod(asyncUnaryCall);
-        module.deoptimizeFeatureMethod(blockingUnaryCall);
 
         XposedInterface.Hooker hooker = chain -> {
             String fullMethodName = rpcName(chain.getArg(0));
@@ -210,33 +213,29 @@ public final class MossHookHub {
                 nextArgs -> runUnaryCall(fullMethodName, chain, next, nextArgs));
     }
 
-    private void installFactoryHooks() throws Throwable {
+    private void installFactoryHook(Factory factory) throws Throwable {
         Class<?> factoryClass = module.load(classLoader, METADATA_FACTORY_CLASS);
-        for (Map.Entry<Factory, List<FactoryRewriter>> entry : factoryRewriters.entrySet()) {
-            Factory factory = entry.getKey();
-            List<FactoryRewriter> rewriters = entry.getValue();
-            Method method = module.declaredMethod(factoryClass, factory.methodName);
-            module.deoptimizeFeatureMethod(method);
-            module.addHook("Moss shared " + factory.label + " factory", method, chain -> {
-                Object result = chain.proceed();
-                if (!(result instanceof byte[])) {
-                    return result;
-                }
-                byte[] bytes = (byte[]) result;
-                for (FactoryRewriter rewriter : rewriters) {
-                    try {
-                        byte[] rewritten = rewriter.rewrite(bytes);
-                        if (rewritten != null) {
-                            bytes = rewritten;
-                        }
-                    } catch (Throwable throwable) {
-                        module.error("Moss shared " + factory.label
-                                + " factory rewriter failed; bytes retained", throwable);
+        List<FactoryRewriter> rewriters = factoryRewriters.get(factory);
+        Method method = module.declaredMethod(factoryClass, factory.methodName);
+        module.addHook("Moss shared " + factory.label + " factory", method, chain -> {
+            Object result = chain.proceed();
+            if (!(result instanceof byte[])) {
+                return result;
+            }
+            byte[] bytes = (byte[]) result;
+            for (FactoryRewriter rewriter : rewriters) {
+                try {
+                    byte[] rewritten = rewriter.rewrite(bytes);
+                    if (rewritten != null) {
+                        bytes = rewritten;
                     }
+                } catch (Throwable throwable) {
+                    module.error("Moss shared " + factory.label
+                            + " factory rewriter failed; bytes retained", throwable);
                 }
-                return bytes;
-            });
-        }
+            }
+            return bytes;
+        });
     }
 
     private void installGrpcCallHooks(String part) throws Throwable {
@@ -253,7 +252,6 @@ public final class MossHookHub {
         Method startCall = module.declaredMethod(
                 callClass, "e", responseListenerClass, headersClass);
         resolveDescriptorName(descriptorClass);
-        module.deoptimizeFeatureMethod(createCall);
         module.deoptimizeFeatureMethod(startCall);
         List<GrpcCallObserver> observers = grpcCallObservers.get(part);
 
@@ -389,12 +387,6 @@ public final class MossHookHub {
         return classes;
     }
 
-    private void ensureNotInstalled() {
-        if (installed) {
-            throw new IllegalStateException("MossHookHub already installed");
-        }
-    }
-
     private static int countValues(Map<?, ? extends List<?>> map) {
         int count = 0;
         for (List<?> list : map.values()) {
@@ -404,6 +396,10 @@ public final class MossHookHub {
     }
 
     private void installGroup(String label, ThrowingAction action) {
+        if (installedGroups.contains(label)) {
+            return;
+        }
+        installedGroups.add(label);
         try {
             action.run();
             module.info("Moss shared hook group ready: " + label);

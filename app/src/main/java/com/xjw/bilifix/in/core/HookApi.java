@@ -44,6 +44,11 @@ public interface HookApi {
 
     boolean isVerboseLoggingEnabled();
 
+    /**
+     * 改 proceed() 真正执行的那份原方法。
+     * 只有原方法里直接调用了另一个也被 hook、而且短到可能被编译器并进去的方法时才需要，否则里面的 hook 不会走到。
+     * 不满足这个条件不要调用，调用只会让原方法变慢。
+     */
     boolean deoptimizeFeatureMethod(Method method);
 
     Class<?> load(ClassLoader classLoader, String name) throws ClassNotFoundException;

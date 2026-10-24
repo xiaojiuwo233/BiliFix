@@ -64,7 +64,6 @@ final class SubtitleTransportHooks {
         Method request = module.declaredMethod(
                 handlerClass, "g", requestClass, dispatcherClass,
                 functionClass, functionClass);
-        module.deoptimizeFeatureMethod(request);
         module.addHook("AI subtitle Chronos URLRequest", request, chain -> {
             if (!isDiagnosticsEnabled()) {
                 return chain.proceed();
@@ -102,8 +101,6 @@ final class SubtitleTransportHooks {
         Method getBody = module.declaredMethod(responseClass, "a");
         Method getContent = module.declaredMethod(bodyClass, "b");
         Method getBinary = module.declaredMethod(bodyClass, "a");
-        module.deoptimizeFeatureMethod(onResponse);
-        module.deoptimizeFeatureMethod(onError);
 
         module.addHook("AI subtitle Chronos HTTP response", onResponse, chain -> {
             if (!isDiagnosticsEnabled()) {

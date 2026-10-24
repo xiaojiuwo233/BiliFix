@@ -7,6 +7,7 @@ import android.net.Uri;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
+import com.xjw.bilifix.in.core.RestHookHub;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -18,6 +19,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.WeakHashMap;
 
+import io.github.libxposed.api.XposedInterface;
+
 /** Non-article compatibility hooks ported from the supplied plug-in. */
 public final class CompatFeatureHooks {
     private static final String RELATION_PATH = "/h5/follow";
@@ -27,6 +30,7 @@ public final class CompatFeatureHooks {
 
     private final HookApi module;
     private final ClassLoader classLoader;
+    private final RestHookHub restHub;
     private final Map<Activity, Boolean> walletActivities = Collections.synchronizedMap(
             new WeakHashMap<>());
 
@@ -35,9 +39,10 @@ public final class CompatFeatureHooks {
     private volatile Method settingsGetUserAgent;
     private volatile Method settingsSetUserAgent;
 
-    public CompatFeatureHooks(HookApi module, ClassLoader classLoader) {
+    public CompatFeatureHooks(HookApi module, ClassLoader classLoader, RestHookHub restHub) {
         this.module = module;
         this.classLoader = classLoader;
+        this.restHub = restHub;
     }
 
     public void install() {
@@ -74,8 +79,6 @@ public final class CompatFeatureHooks {
         Constructor<?> urlCarrierConstructor = urlCarrierClass.getDeclaredConstructor(Uri.class);
         urlCarrierConstructor.setAccessible(true);
 
-        boolean deoptimized = module.deoptimizeFeatureMethod(intercept);
-        module.info("compat Web route deoptimized=" + deoptimized);
         module.addHook("WebGeneralInterceptor target route", intercept, hookChain -> {
             Object routerChain = hookChain.getArg(0);
             try {
@@ -235,8 +238,10 @@ public final class CompatFeatureHooks {
     }
 
     private void installRegionHook() throws Throwable {
+        Class<?> requestClass = module.load(classLoader, "okhttp3.a0");
         Class<?> requestBuilderClass = module.load(classLoader, "okhttp3.a0$a");
         Class<?> httpUrlClass = module.load(classLoader, "okhttp3.t");
+        Method newBuilder = module.declaredMethod(requestClass, "i");
         Field urlField = module.declaredField(requestBuilderClass, "a");
         Method build = module.declaredMethod(requestBuilderClass, "b");
         Method parseUrl = module.declaredMethod(httpUrlClass, "l", String.class);
@@ -244,28 +249,39 @@ public final class CompatFeatureHooks {
             throw new NoSuchMethodException("okhttp3.t.l(String) is not static");
         }
 
-        module.addHook("OkHttp region endpoint", build, hookChain -> {
-            module.ensureFeatureSettings(currentApplication());
-            if (!module.isRegionFixEnabled()) {
-                return hookChain.proceed();
+        restHub.addRequestScope(new RestHookHub.RequestScope() {
+            @Override
+            public boolean matches(String url, String verb) {
+                return "GET".equalsIgnoreCase(verb) && url.contains(OLD_REGION_PATH);
             }
-            try {
-                Object oldUrl = urlField.get(hookChain.getThisObject());
-                Uri original = oldUrl == null ? null : Uri.parse(String.valueOf(oldUrl));
-                if (original != null
-                        && "app.bilibili.com".equalsIgnoreCase(original.getHost())
-                        && OLD_REGION_PATH.equals(original.getEncodedPath())) {
-                    Uri fixed = original.buildUpon().encodedPath(NEW_REGION_PATH).build();
-                    Object parsed = invoke(parseUrl, null, fixed.toString());
-                    urlField.set(hookChain.getThisObject(), parsed);
-                    module.info("region endpoint repaired: " + OLD_REGION_PATH
-                            + " -> " + NEW_REGION_PATH);
+
+            @Override
+            public Object around(String url, String verb, XposedInterface.Chain chain,
+                    Object[] args, RestHookHub.Next next) throws Throwable {
+                module.ensureFeatureSettings(currentApplication());
+                if (!module.isRegionFixEnabled()) {
+                    return next.proceed(args);
                 }
-            } catch (Throwable throwable) {
-                module.error("region endpoint rewrite failed; original request retained",
-                        throwable);
+                try {
+                    Uri original = Uri.parse(url);
+                    if ("app.bilibili.com".equalsIgnoreCase(original.getHost())
+                            && OLD_REGION_PATH.equals(original.getEncodedPath())) {
+                        Uri fixed = original.buildUpon().encodedPath(NEW_REGION_PATH).build();
+                        Object request = args != null && args.length > 0
+                                ? args[0] : chain.getArg(0);
+                        Object builder = invoke(newBuilder, request);
+                        urlField.set(builder, invoke(parseUrl, null, fixed.toString()));
+                        Object repaired = invoke(build, builder);
+                        module.info("region endpoint repaired: " + OLD_REGION_PATH
+                                + " -> " + NEW_REGION_PATH);
+                        return next.proceed(new Object[]{repaired});
+                    }
+                } catch (Throwable throwable) {
+                    module.error("region endpoint rewrite failed; original request retained",
+                            throwable);
+                }
+                return next.proceed(args);
             }
-            return hookChain.proceed();
         });
     }
 

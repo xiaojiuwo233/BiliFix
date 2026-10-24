@@ -81,7 +81,6 @@ final class CommentAuthCoordinator {
 
     private void installAuthorizationFactory(Class<?> metadataFactoryClass) throws Throwable {
         Method createAuthorization = module.declaredMethod(metadataFactoryClass, "j");
-        module.deoptimizeFeatureMethod(createAuthorization);
         module.addHook("IP location Moss authorization factory", createAuthorization,
                 hookChain -> {
                     Object result = hookChain.proceed();

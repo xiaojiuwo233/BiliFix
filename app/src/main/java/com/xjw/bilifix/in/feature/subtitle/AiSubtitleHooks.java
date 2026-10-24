@@ -145,7 +145,6 @@ public final class AiSubtitleHooks {
         RecoveredSubtitleLabeler labeler = new RecoveredSubtitleLabeler(
                 module, videoSubtitleClass, subtitleItemClass);
 
-        module.deoptimizeFeatureMethod(getSubtitle);
         module.addHook("AI subtitle DmView response", getSubtitle, hookChain -> {
             Object result = hookChain.proceed();
             module.ensureFeatureSettings(currentApplication());
