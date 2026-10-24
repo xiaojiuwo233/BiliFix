@@ -1,6 +1,6 @@
 # BiliFix
 
-针对新版国际版（6.2.6）以上的版本实验性修复分支，低优先级维护状态，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。
+针对新版国际版（6.2.6）以上的版本实验性修复分支，详见[关于新版bilibili国际版的说明](https://github.com/xiaojiuwo233/BiliFix/issues/6)。
 
 > 自用模块，不保证其稳定性，欢迎各位大佬贡献！
 
@@ -34,8 +34,8 @@
 
 ## 下载
 
-- [稳定版](https://github.com/xiaojiuwo233/BiliFix/releases/tag/b6-0.6.0)（推荐的CI，可能稳定）
-- [CI](https://github.com/xiaojiuwo233/BiliFix/actions?query=branch%3A6.2.6)（包含实时更新的内容，功能最新，可能不稳定）
+- [稳定版 (带有**Pre-release**标志的版本)](https://github.com/xiaojiuwo233/BiliFix/releases)（推荐的CI，可能稳定）
+- [CI](https://github.com/xiaojiuwo233/BiliFix/actions?query=branch%3A6.2.6)（包含最新的内容，可能不稳定）
 
 ## 反馈
 
