@@ -42,6 +42,8 @@ public interface HookApi {
 
     boolean isSystemShareEnabled();
 
+    boolean isAudioVideoSyncEnabled();
+
     boolean isVerboseLoggingEnabled();
 
     /**

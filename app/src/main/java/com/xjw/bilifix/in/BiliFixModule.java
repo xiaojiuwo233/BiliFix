@@ -30,6 +30,7 @@ import com.xjw.bilifix.in.feature.commenttranslation.CommentTranslationHooks;
 import com.xjw.bilifix.in.feature.compat.CompatFeatureHooks;
 import com.xjw.bilifix.in.feature.emoticon.PaidEmoticonHooks;
 import com.xjw.bilifix.in.feature.location.IpLocationHooks;
+import com.xjw.bilifix.in.feature.player.AudioVideoSyncHooks;
 import com.xjw.bilifix.in.feature.share.SystemShareHooks;
 import com.xjw.bilifix.in.feature.settings.SettingsManager;
 import com.xjw.bilifix.in.feature.subtitle.AiSubtitleHooks;
@@ -135,6 +136,9 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                         || settingsManager.isSpaceDomesticModulesEnabled(),
                 () -> new IpLocationHooks(this, classLoader, moss, rest).install()));
         if (mainProcess) {
+            features.add(new Feature("audio/video sync",
+                    settingsManager::isAudioVideoSyncEnabled,
+                    () -> new AudioVideoSyncHooks(this, classLoader).install()));
             features.add(new Feature("dynamic article",
                     settingsManager::isDynamicArticleFixEnabled,
                     () -> new DynamicArticleIdentityHooks(this, classLoader, moss).install()));
@@ -363,6 +367,11 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     @Override
     public boolean isSystemShareEnabled() {
         return settingsManager.isSystemShareEnabled();
+    }
+
+    @Override
+    public boolean isAudioVideoSyncEnabled() {
+        return settingsManager.isAudioVideoSyncEnabled();
     }
 
     @Override

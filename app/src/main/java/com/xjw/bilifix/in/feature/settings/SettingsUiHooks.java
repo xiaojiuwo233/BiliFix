@@ -9,6 +9,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ABOUT;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_COMMENT_TRANSLATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_SUBTITLE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ARTICLE_FIX_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AUDIO_VIDEO_SYNC_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_DYNAMIC_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_PAID_EMOTICON_FIX_ENABLED;
@@ -271,6 +272,15 @@ final class SettingsUiHooks {
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
+                        addSwitch(repairCategory, switchConstructor,
+                                KEY_AUDIO_VIDEO_SYNC_ENABLED,
+                                "修复视频音画不同步",
+                                "针对部分特殊设备，没这个问题不要开启",
+                                settings.isAudioVideoSyncEnabled(), 7,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
                         Object enhanceCategory = createCategory(
                                 context, categoryConstructor, categoryTitleLayout,
                                 "增强", 1, setTitle, setLayoutResource, setOrder);
@@ -357,6 +367,7 @@ final class SettingsUiHooks {
                                 + settings.isAiCommentTranslationEnabled()
                                 + " paidEmoticonFix=" + settings.isPaidEmoticonFixEnabled()
                                 + " systemShare=" + settings.isSystemShareEnabled()
+                                + " audioVideoSync=" + settings.isAudioVideoSyncEnabled()
                                 + " verboseLogging=" + settings.isVerboseLoggingEnabled());
                         return null;
                     } catch (Throwable throwable) {
