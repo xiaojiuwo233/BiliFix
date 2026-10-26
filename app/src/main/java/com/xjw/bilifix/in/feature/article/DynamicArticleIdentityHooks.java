@@ -63,6 +63,8 @@ public final class DynamicArticleIdentityHooks {
 
     public void install() {
         installGroup("dynamic read request identity", this::installMossIdentityHooks);
+        installGroup("following most-visited live entries",
+                () -> new FollowingLiveEntriesHooks(module, classLoader, mossHub).install());
         installGroup("following feed DynAll entry", this::installFollowingFeedEntryHook);
         installGroup("following feed load scope", this::installFollowingFeedLoadScope);
         installGroup("following feed response diagnostics",
