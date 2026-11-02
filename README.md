@@ -9,7 +9,7 @@
 
 ## 兼容性
 
-- 支持哔哩哔哩国际版 `(com.bilibili.app.in)` 6.2.6 ~ 6.7.1
+- 支持哔哩哔哩国际版 `(com.bilibili.app.in)` 6.2.6 ~ 6.8.0 (理论可自动适配后续版本)
 - Xposed API 101 或更高版本
 
 ## 功能
@@ -44,6 +44,14 @@
 注意，反馈前请先更新到最新[CI](https://github.com/xiaojiuwo233/BiliFix/actions?query=branch%3A6.2.6)后在设置中开启**详细日志**，并附上必要的复现步骤和日志，否则issue将会被关闭。
 
 **此版本维护优先级较低，可能不会及时处理，反馈时请注明版本号**
+
+## 致谢
+
+本项目在开发过程中参考或使用了以下项目，向他们表示感谢！
+
+- [BiliRoaming](https://github.com/yujincheng08/biliroaming)
+- [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus)
+- [DexKit](https://github.com/LuckyPray/DexKit)
 
 ## 许可证
 
