@@ -7,7 +7,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.ADVANCED_SETTI
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.ARG_BILIFIX_SETTINGS_PAGE;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ABOUT;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_COMMENT_FREE_COPY_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_COMMENT_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_GAME_CENTER_ENTRY;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_LIVE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_MESSAGE_TOP_RIGHT_ENABLED;
@@ -15,6 +15,7 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STO
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_HOME_CARD_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_MASTER_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_PROFILE_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_VERBOSE_LOGGING_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RESTART_HOST;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
@@ -301,10 +302,19 @@ final class SettingsUiHooks {
                                     setPersistent, setOrder,
                                     setOnPreferenceChangeListener, setChecked);
                             addSwitch(enhanceCategory, switchConstructor,
-                                    KEY_IP_LOCATION_ENABLED,
-                                    "显示IP属地（实验性）",
-                                    "和国内版一样在评论区和用户主页显示IP属地",
-                                    settings.isIpLocationEnabled(), 1,
+                                    KEY_PROFILE_IP_LOCATION_ENABLED,
+                                    "主页显示IP属地",
+                                    "用户主页显示IP属地",
+                                    settings.isProfileIpLocationEnabled(), 1,
+                                    changeListenerClass, context,
+                                    addPreference, setKey, setTitle, setSummary,
+                                    setPersistent, setOrder,
+                                    setOnPreferenceChangeListener, setChecked);
+                            addSwitch(enhanceCategory, switchConstructor,
+                                    KEY_COMMENT_IP_LOCATION_ENABLED,
+                                    "评论区显示IP属地（已弃用）",
+                                    "国际版已原生支持显示，非必要请勿再次开启",
+                                    settings.isCommentIpLocationEnabled(), 2,
                                     changeListenerClass, context,
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
@@ -313,7 +323,7 @@ final class SettingsUiHooks {
                                     KEY_COMMENT_FREE_COPY_ENABLED,
                                     "自由复制",
                                     "视频简介、评论与私信消息自由复制，来自哔哩漫游",
-                                    settings.isCommentFreeCopyEnabled(), 2,
+                                    settings.isCommentFreeCopyEnabled(), 3,
                                     changeListenerClass, context,
                                     addPreference, setKey, setTitle, setSummary,
                                     setPersistent, setOrder,
@@ -375,7 +385,10 @@ final class SettingsUiHooks {
                         module.info("BiliFix settings page created: moduleVersion="
                                 + BuildConfig.VERSION_NAME
                                 + " host=" + module.hostVersion()
-                                + " ipLocation=" + settings.isIpLocationEnabled()
+                                + " profileIpLocation="
+                                + settings.isProfileIpLocationEnabled()
+                                + " commentIpLocation="
+                                + settings.isCommentIpLocationEnabled()
                                 + " commentFreeCopy="
                                 + settings.isCommentFreeCopyEnabled()
                                 + " modernLive=" + settings.isModernLiveEnabled()

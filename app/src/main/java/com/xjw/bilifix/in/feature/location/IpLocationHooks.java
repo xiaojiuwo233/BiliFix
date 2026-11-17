@@ -141,7 +141,7 @@ public final class IpLocationHooks {
                         return hookChain.proceed();
                     }
                     module.ensureFeatureSettings(currentApplication());
-                    if (!module.isIpLocationEnabled()) {
+                    if (!module.isCommentIpLocationEnabled()) {
                         return hookChain.proceed();
                     }
 
@@ -324,7 +324,7 @@ public final class IpLocationHooks {
         Field methodName = module.declaredField(descriptorClass, "c");
         module.addHook("6.2.6 Kotlin Moss comment RPC", call, hookChain -> {
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) return hookChain.proceed();
+            if (!module.isCommentIpLocationEnabled()) return hookChain.proceed();
             Object descriptor = hookChain.getArg(0);
             String service = descriptor == null
                     ? ""
@@ -349,7 +349,7 @@ public final class IpLocationHooks {
                 engineCallbackClass, optionsClass);
         module.addHook("6.2.6 Kotlin Moss concrete engine", engineCall, hookChain -> {
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) return hookChain.proceed();
+            if (!module.isCommentIpLocationEnabled()) return hookChain.proceed();
             Object descriptor = hookChain.getArg(1);
             String service = descriptor == null
                     ? ""
@@ -374,7 +374,7 @@ public final class IpLocationHooks {
         module.addHook("6.2.6 Kotlin Moss common headers scope", getHeaders,
                 hookChain -> {
                     module.ensureFeatureSettings(currentApplication());
-                    if (!module.isIpLocationEnabled()) return hookChain.proceed();
+                    if (!module.isCommentIpLocationEnabled()) return hookChain.proceed();
                     Object descriptor = hookChain.getArg(1);
                     String service = descriptor == null
                             ? ""
@@ -409,7 +409,7 @@ public final class IpLocationHooks {
         module.addHook("6.2.6 Kotlin Moss common header interceptor", commonHeaderIntercept,
                 hookChain -> {
                     module.ensureFeatureSettings(currentApplication());
-                    if (!module.isIpLocationEnabled()) return hookChain.proceed();
+                    if (!module.isCommentIpLocationEnabled()) return hookChain.proceed();
                     Object context = hookChain.getArg(0);
                     Object request = context == null
                             ? null
@@ -461,7 +461,7 @@ public final class IpLocationHooks {
             module.addHook("6.2.6 Kotlin Moss " + rpcMethodName + " facade",
                     facade, hookChain -> {
                         module.ensureFeatureSettings(currentApplication());
-                        if (!module.isIpLocationEnabled()) {
+                        if (!module.isCommentIpLocationEnabled()) {
                             return hookChain.proceed();
                         }
                         String source = "6.2.6 Kotlin Moss facade Reply/" + rpcMethodName;
@@ -484,7 +484,7 @@ public final class IpLocationHooks {
             module.addHook("6.2.6 Kotlin Moss MainList caller " + callerName,
                     invokeSuspend, hookChain -> {
                         module.ensureFeatureSettings(currentApplication());
-                        if (!module.isIpLocationEnabled()) {
+                        if (!module.isCommentIpLocationEnabled()) {
                             return hookChain.proceed();
                         }
                         String source = "6.2.6 Kotlin Moss caller Reply/MainList";
@@ -579,7 +579,8 @@ public final class IpLocationHooks {
 
         module.addHook("6.2.6 targeted REST scope", intercept, hookChain -> {
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled() && !module.isModernLiveEnabled()) {
+            if (!module.isProfileIpLocationEnabled() && !module.isCommentIpLocationEnabled()
+                    && !module.isModernLiveEnabled()) {
                 return hookChain.proceed();
             }
             Object request = hookChain.getArg(0);
@@ -650,7 +651,7 @@ public final class IpLocationHooks {
         module.addHook("6.4 " + label + " identity", addCommonParam, hookChain -> {
             Object result = hookChain.proceed();
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
+            if (!module.isProfileIpLocationEnabled()) {
                 return result;
             }
             Object value = hookChain.getArg(0);
@@ -687,7 +688,7 @@ public final class IpLocationHooks {
         Method bind = module.declaredMethod(viewModelClass, "e", commentClass);
         module.addHook("6.2.6 comment location binding", bind, hookChain -> {
             Object result = hookChain.proceed();
-            if (module.isIpLocationEnabled()) {
+            if (module.isCommentIpLocationEnabled()) {
                 Object comment = hookChain.getArg(0);
                 Object control = comment == null ? null : replyControl.get(comment);
                 logCommentLocation("6.2.6 comment2 binding",
@@ -703,7 +704,7 @@ public final class IpLocationHooks {
         module.addHook("6.2.6 comment3 location model", descriptionConstructor,
                 hookChain -> {
                     Object result = hookChain.proceed();
-                    if (module.isIpLocationEnabled()) {
+                    if (module.isCommentIpLocationEnabled()) {
                         logCommentLocation("6.2.6 comment3 description",
                                 hookChain.getArg(1));
                     }
@@ -741,11 +742,16 @@ public final class IpLocationHooks {
         return null;
     }
 
+    /** The profile and comment halves of the IP location feature have separate switches. */
+    private boolean isLocationEnabled(ScopeKind kind) {
+        return kind == ScopeKind.PROFILE_REST
+                ? module.isProfileIpLocationEnabled()
+                : module.isCommentIpLocationEnabled();
+    }
+
     private boolean isIdentityEnabled(ScopeKind kind) {
-        if (kind == ScopeKind.PROFILE_REST) {
-            return module.isIpLocationEnabled() || module.isModernLiveEnabled();
-        }
-        return module.isIpLocationEnabled();
+        return isLocationEnabled(kind)
+                || (kind == ScopeKind.PROFILE_REST && module.isModernLiveEnabled());
     }
 
     private void installRestIdentityHooks() throws Throwable {
@@ -776,7 +782,7 @@ public final class IpLocationHooks {
                 return hookChain.proceed();
             }
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
+            if (!isLocationEnabled(kind)) {
                 return hookChain.proceed();
             }
             Uri uri = Uri.parse(url);
@@ -788,7 +794,7 @@ public final class IpLocationHooks {
         module.addHook("IP location domestic REST parameters", addCommonParam, hookChain -> {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
-            if (scope == null || !scope.kind.isRest() || !module.isIpLocationEnabled()) {
+            if (scope == null || !scope.kind.isRest() || !isLocationEnabled(scope.kind)) {
                 return result;
             }
             Object value = hookChain.getArg(0);
@@ -818,7 +824,7 @@ public final class IpLocationHooks {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
             if (scope == null || !scope.kind.isRest() || !(result instanceof String)
-                    || !module.isIpLocationEnabled()) {
+                    || !isLocationEnabled(scope.kind)) {
                 return result;
             }
             String original = (String) result;
@@ -917,7 +923,7 @@ public final class IpLocationHooks {
                     Object result = hookChain.proceed();
                     RequestScope scope = requestScope.get();
                     if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                            || !module.isIpLocationEnabled()) {
+                            || !module.isCommentIpLocationEnabled()) {
                         return result;
                     }
                     Object headers = hookChain.getArg(0);
@@ -1014,7 +1020,7 @@ public final class IpLocationHooks {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
             if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                    || !module.isIpLocationEnabled() || !(result instanceof byte[])) {
+                    || !module.isCommentIpLocationEnabled() || !(result instanceof byte[])) {
                 return result;
             }
             try {
@@ -1042,7 +1048,7 @@ public final class IpLocationHooks {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
             if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                    || !module.isIpLocationEnabled() || !(result instanceof String)) {
+                    || !module.isCommentIpLocationEnabled() || !(result instanceof String)) {
                 return result;
             }
             try {
@@ -1081,7 +1087,7 @@ public final class IpLocationHooks {
                 return hookChain.proceed();
             }
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) {
+            if (!module.isCommentIpLocationEnabled()) {
                 return hookChain.proceed();
             }
             logTargetRequest(ScopeKind.COMMENT_RPC, "Moss " + fullMethodName);
@@ -1094,7 +1100,7 @@ public final class IpLocationHooks {
             String label, Method callMethod, Field descriptorName) {
         module.addHook(label, callMethod, hookChain -> {
             module.ensureFeatureSettings(currentApplication());
-            if (!module.isIpLocationEnabled()) return hookChain.proceed();
+            if (!module.isCommentIpLocationEnabled()) return hookChain.proceed();
             Object descriptor = hookChain.getArg(0);
             String fullMethodName = String.valueOf(descriptorName.get(descriptor));
             if (!isCommentReadRpc(fullMethodName)) {
@@ -1148,7 +1154,7 @@ public final class IpLocationHooks {
                     }
                     module.ensureFeatureSettings(currentApplication());
                     Object call = hookChain.proceed();
-                    if (module.isIpLocationEnabled() && call != null) {
+                    if (module.isCommentIpLocationEnabled() && call != null) {
                         mossCallScopes.put(call, new RequestScope(
                                 ScopeKind.COMMENT_RPC,
                                 "Moss-gRPC " + fullMethodName + " [" + part + "]"));
@@ -1159,7 +1165,7 @@ public final class IpLocationHooks {
         module.addHook("IP location Moss gRPC " + part + " final headers",
                 startCall, hookChain -> {
                     RequestScope scope = mossCallScopes.remove(hookChain.getThisObject());
-                    if (scope == null || !module.isIpLocationEnabled()) {
+                    if (scope == null || !module.isCommentIpLocationEnabled()) {
                         return hookChain.proceed();
                     }
                     logFinalTransport("grpc", scope.source);
@@ -1193,7 +1199,7 @@ public final class IpLocationHooks {
                         return hookChain.proceed();
                     }
                     module.ensureFeatureSettings(currentApplication());
-                    if (!module.isIpLocationEnabled()) {
+                    if (!module.isCommentIpLocationEnabled()) {
                         return hookChain.proceed();
                     }
                     Uri uri = Uri.parse(url);
@@ -1234,7 +1240,7 @@ public final class IpLocationHooks {
 
         module.deoptimizeFeatureMethod(convert);
         module.addHook("IP location MainList response diagnostics", convert, hookChain -> {
-            if (module.isIpLocationEnabled()) {
+            if (module.isCommentIpLocationEnabled()) {
                 Object reply = hookChain.getArg(0);
                 int replies = ((Number) module.invoke(getRepliesCount, reply)).intValue();
                 int topReplies = ((Number) module.invoke(
@@ -1317,7 +1323,7 @@ public final class IpLocationHooks {
         Field restLocation = module.declaredField(restControlClass, "location");
         Method bindComment = module.declaredMethod(viewModelClass, "N", commentClass);
         module.addHook("IP location comment2 binding", bindComment, hookChain -> {
-            if (module.isIpLocationEnabled()) {
+            if (module.isCommentIpLocationEnabled()) {
                 Object comment = hookChain.getArg(0);
                 Object control = comment == null ? null : replyControl.get(comment);
                 logCommentLocation("comment2 binding",
@@ -1336,7 +1342,7 @@ public final class IpLocationHooks {
         Field type = module.declaredField(tagClass, "b");
         Field title = module.declaredField(tagClass, "d");
         module.addHook("IP location profile bottom tags", render, hookChain -> {
-            if (module.isIpLocationEnabled()) {
+            if (module.isProfileIpLocationEnabled()) {
                 logProfileTags("space_tag_bottom", hookChain.getArg(0), type, title);
             }
             return hookChain.proceed();
@@ -1352,7 +1358,7 @@ public final class IpLocationHooks {
         Field type = module.declaredField(tagClass, "type");
         Field title = module.declaredField(tagClass, "text");
         module.addHook("IP location profile header tags", render, hookChain -> {
-            if (module.isIpLocationEnabled()) {
+            if (module.isProfileIpLocationEnabled()) {
                 logProfileTags("space_tag", hookChain.getArg(0), type, title);
             }
             return hookChain.proceed();
@@ -1360,7 +1366,7 @@ public final class IpLocationHooks {
     }
 
     private void logCommentLocation(String source, Object value) {
-        if (!module.isIpLocationEnabled()) {
+        if (!module.isCommentIpLocationEnabled()) {
             return;
         }
         String location = value instanceof String ? (String) value : null;

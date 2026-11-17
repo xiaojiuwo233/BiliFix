@@ -20,7 +20,9 @@ public final class SettingsManager {
     private static final String SETTINGS_CHANGED_ACTION =
             TARGET_PACKAGE + ".BILIFIX_SETTINGS_CHANGED";
 
-    static final String KEY_IP_LOCATION_ENABLED = "bilifix_ip_location_enabled";
+    static final String KEY_PROFILE_IP_LOCATION_ENABLED = "bilifix_ip_location_enabled";
+    static final String KEY_COMMENT_IP_LOCATION_ENABLED =
+            "bilifix_comment_ip_location_enabled";
     static final String KEY_COMMENT_FREE_COPY_ENABLED = "bilifix_comment_free_copy_enabled";
     private static final String LEGACY_KEY_VIDEO_DESCRIPTION_FREE_COPY_ENABLED =
             "bilifix_video_description_free_copy_enabled";
@@ -55,7 +57,8 @@ public final class SettingsManager {
     private final AtomicBoolean storageLogged = new AtomicBoolean(false);
 
     private volatile boolean loaded;
-    private volatile boolean ipLocationEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean profileIpLocationEnabled = DEFAULT_FEATURE_ENABLED;
+    private volatile boolean commentIpLocationEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean commentFreeCopyEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernLiveEnabled = DEFAULT_FEATURE_ENABLED;
     private volatile boolean modernGameCenterEnabled = DEFAULT_FEATURE_ENABLED;
@@ -73,7 +76,10 @@ public final class SettingsManager {
                 return;
             }
             apply(
-                    intent.getBooleanExtra(KEY_IP_LOCATION_ENABLED, ipLocationEnabled),
+                    intent.getBooleanExtra(KEY_PROFILE_IP_LOCATION_ENABLED,
+                            profileIpLocationEnabled),
+                    intent.getBooleanExtra(KEY_COMMENT_IP_LOCATION_ENABLED,
+                            commentIpLocationEnabled),
                     intent.getBooleanExtra(KEY_COMMENT_FREE_COPY_ENABLED,
                             commentFreeCopyEnabled),
                     intent.getBooleanExtra(KEY_MODERN_LIVE_ENABLED, modernLiveEnabled),
@@ -106,7 +112,8 @@ public final class SettingsManager {
     boolean persist(Context context, String key, boolean value) {
         try {
             SharedPreferences preferences = preferences(context);
-            boolean ipLocation;
+            boolean profileIpLocation;
+            boolean commentIpLocation;
             boolean commentFreeCopy;
             boolean modernLive;
             boolean modernGameCenter;
@@ -119,8 +126,10 @@ public final class SettingsManager {
             // Keep the write, read-back and in-memory publication atomic with ensureLoaded().
             synchronized (stateLock) {
                 preferences.edit().putBoolean(key, value).apply();
-                ipLocation = preferences.getBoolean(KEY_IP_LOCATION_ENABLED,
-                        DEFAULT_FEATURE_ENABLED);
+                profileIpLocation = preferences.getBoolean(
+                        KEY_PROFILE_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED);
+                commentIpLocation = preferences.getBoolean(
+                        KEY_COMMENT_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED);
                 commentFreeCopy = readFreeCopyEnabled(preferences);
                 modernLive = preferences.getBoolean(KEY_MODERN_LIVE_ENABLED,
                         DEFAULT_FEATURE_ENABLED);
@@ -137,7 +146,8 @@ public final class SettingsManager {
                         KEY_MODERN_STORY_PLAYER_BUTTON_ENABLED, DEFAULT_FEATURE_ENABLED);
                 verboseLogging = preferences.getBoolean(
                         KEY_VERBOSE_LOGGING_ENABLED, DEFAULT_FEATURE_ENABLED);
-                applyLocked(ipLocation, commentFreeCopy, modernLive, modernGameCenter,
+                applyLocked(profileIpLocation, commentIpLocation, commentFreeCopy,
+                        modernLive, modernGameCenter,
                         modernMessageTopRight, modernStoryMaster, modernStory,
                         modernStoryHomeCard, modernStoryPlayerButton, verboseLogging,
                         "settings-page");
@@ -145,7 +155,8 @@ public final class SettingsManager {
 
             Intent update = new Intent(SETTINGS_CHANGED_ACTION)
                     .setPackage(TARGET_PACKAGE)
-                    .putExtra(KEY_IP_LOCATION_ENABLED, ipLocation)
+                    .putExtra(KEY_PROFILE_IP_LOCATION_ENABLED, profileIpLocation)
+                    .putExtra(KEY_COMMENT_IP_LOCATION_ENABLED, commentIpLocation)
                     .putExtra(KEY_COMMENT_FREE_COPY_ENABLED, commentFreeCopy)
                     .putExtra(KEY_MODERN_LIVE_ENABLED, modernLive)
                     .putExtra(KEY_MODERN_GAME_CENTER_ENABLED, modernGameCenter)
@@ -184,7 +195,10 @@ public final class SettingsManager {
             }
             SharedPreferences preferences = preferences(context);
             apply(
-                    preferences.getBoolean(KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(KEY_PROFILE_IP_LOCATION_ENABLED,
+                            DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(KEY_COMMENT_IP_LOCATION_ENABLED,
+                            DEFAULT_FEATURE_ENABLED),
                     readFreeCopyEnabled(preferences),
                     preferences.getBoolean(KEY_MODERN_LIVE_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(KEY_MODERN_GAME_CENTER_ENABLED,
@@ -251,7 +265,8 @@ public final class SettingsManager {
     }
 
     private void apply(
-            boolean ipLocation,
+            boolean profileIpLocation,
+            boolean commentIpLocation,
             boolean commentFreeCopy,
             boolean modernLive,
             boolean modernGameCenter,
@@ -263,14 +278,16 @@ public final class SettingsManager {
             boolean verboseLogging,
             String source) {
         synchronized (stateLock) {
-            applyLocked(ipLocation, commentFreeCopy, modernLive, modernGameCenter,
+            applyLocked(profileIpLocation, commentIpLocation, commentFreeCopy,
+                    modernLive, modernGameCenter,
                     modernMessageTopRight, modernStoryMaster, modernStory,
                     modernStoryHomeCard, modernStoryPlayerButton, verboseLogging, source);
         }
     }
 
     private void applyLocked(
-            boolean ipLocation,
+            boolean profileIpLocation,
+            boolean commentIpLocation,
             boolean commentFreeCopy,
             boolean modernLive,
             boolean modernGameCenter,
@@ -282,7 +299,8 @@ public final class SettingsManager {
             boolean verboseLogging,
             String source) {
         boolean changed = !loaded
-                || this.ipLocationEnabled != ipLocation
+                || this.profileIpLocationEnabled != profileIpLocation
+                || this.commentIpLocationEnabled != commentIpLocation
                 || this.commentFreeCopyEnabled != commentFreeCopy
                 || this.modernLiveEnabled != modernLive
                 || this.modernGameCenterEnabled != modernGameCenter
@@ -292,7 +310,8 @@ public final class SettingsManager {
                 || this.modernStoryHomeCardEnabled != modernStoryHomeCard
                 || this.modernStoryPlayerButtonEnabled != modernStoryPlayerButton
                 || this.verboseLoggingEnabled != verboseLogging;
-        this.ipLocationEnabled = ipLocation;
+        this.profileIpLocationEnabled = profileIpLocation;
+        this.commentIpLocationEnabled = commentIpLocation;
         this.commentFreeCopyEnabled = commentFreeCopy;
         this.modernLiveEnabled = modernLive;
         this.modernGameCenterEnabled = modernGameCenter;
@@ -305,7 +324,8 @@ public final class SettingsManager {
         loaded = true;
         String message = "settings " + (changed ? "applied" : "unchanged")
                 + ": source=" + source
-                + " ipLocation=" + ipLocation
+                + " profileIpLocation=" + profileIpLocation
+                + " commentIpLocation=" + commentIpLocation
                 + " commentFreeCopy=" + commentFreeCopy
                 + " modernLive=" + modernLive
                 + " modernGameCenter=" + modernGameCenter
@@ -346,8 +366,12 @@ public final class SettingsManager {
         }
     }
 
-    public boolean isIpLocationEnabled() {
-        return ipLocationEnabled;
+    public boolean isProfileIpLocationEnabled() {
+        return profileIpLocationEnabled;
+    }
+
+    public boolean isCommentIpLocationEnabled() {
+        return commentIpLocationEnabled;
     }
 
     public boolean isCommentFreeCopyEnabled() {

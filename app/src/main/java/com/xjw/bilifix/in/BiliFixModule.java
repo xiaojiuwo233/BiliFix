@@ -300,8 +300,13 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
-    public boolean isIpLocationEnabled() {
-        return settingsManager.isIpLocationEnabled();
+    public boolean isProfileIpLocationEnabled() {
+        return settingsManager.isProfileIpLocationEnabled();
+    }
+
+    @Override
+    public boolean isCommentIpLocationEnabled() {
+        return settingsManager.isCommentIpLocationEnabled();
     }
 
     @Override

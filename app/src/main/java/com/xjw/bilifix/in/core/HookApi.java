@@ -19,7 +19,9 @@ public interface HookApi {
 
     void ensureFeatureSettings(Context context);
 
-    boolean isIpLocationEnabled();
+    boolean isProfileIpLocationEnabled();
+
+    boolean isCommentIpLocationEnabled();
 
     boolean isCommentFreeCopyEnabled();
 
