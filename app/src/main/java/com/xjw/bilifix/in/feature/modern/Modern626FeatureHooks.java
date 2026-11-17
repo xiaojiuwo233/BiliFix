@@ -18,6 +18,7 @@ import android.widget.ProgressBar;
 import com.xjw.bilifix.in.core.DexSymbolResolver;
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
+import com.xjw.bilifix.in.core.HomeItemFactory;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -83,7 +84,7 @@ public final class Modern626FeatureHooks {
     private void installModern640HomeDataHook() throws Throwable {
         Class<?> dataClass;
         Class<?> itemClass;
-        Constructor<?> itemConstructor;
+        HomeItemFactory itemConstructor;
         Field topRightField;
         Field topTabField;
         Field bottomTabField;
@@ -118,9 +119,8 @@ public final class Modern626FeatureHooks {
             try {
                 dataClass = module.load(classLoader, "JC1.l");
                 itemClass = module.load(classLoader, "JC1.n");
-                itemConstructor = itemClass.getConstructor(
-                        String.class, String.class, String.class, String.class, String.class,
-                        int.class, int.class, String.class, List.class, int.class, int.class);
+                itemConstructor = HomeItemFactory.resolve(itemClass);
+                if (itemConstructor == null) throw new NoSuchMethodException("KHome item factory");
                 topRightField = module.declaredField(dataClass, "a");
                 topTabField = module.declaredField(dataClass, "b");
                 bottomTabField = module.declaredField(dataClass, "c");
@@ -161,7 +161,7 @@ public final class Modern626FeatureHooks {
 
         final Class<?> homeDataClass = dataClass;
         final Class<?> homeItemClass = itemClass;
-        final Constructor<?> homeItemConstructor = itemConstructor;
+        final HomeItemFactory homeItemConstructor = itemConstructor;
         final Field homeTopRightField = topRightField;
         final Field homeTopTabField = topTabField;
         final Field homeBottomTabField = bottomTabField;
@@ -194,7 +194,7 @@ public final class Modern626FeatureHooks {
         // loaded feature settings. Every real HomeFrame state update goes
         // through DC1.a.copy, so patch the resulting state as the final guard
         // immediately before Compose observes it.
-        module.deoptimizeFeatureMethod(homeCopyFrameState);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(homeCopyFrameState);
         module.addHook("DC1.a final 6.4 home entries", homeCopyFrameState, chain -> {
             Object result = chain.proceed();
             module.ensureFeatureSettings(currentApplication());
@@ -218,7 +218,7 @@ public final class Modern626FeatureHooks {
     }
 
     private void installModern640TopRightConverterHook(
-            Class<?> itemClass, Constructor<?> itemConstructor, Field itemUriField,
+            Class<?> itemClass, HomeItemFactory itemConstructor, Field itemUriField,
             Method resolvedConverter, Field resolvedInput)
             throws Throwable {
         Method invokeSuspend = resolvedConverter;
@@ -232,7 +232,6 @@ public final class Modern626FeatureHooks {
         }
         final Method converterMethod = invokeSuspend;
         final Field converterInputField = inputField;
-        module.deoptimizeFeatureMethod(converterMethod);
         module.addHook("6.4 top-right raw message converter", converterMethod, chain -> {
             module.ensureFeatureSettings(currentApplication());
             if (!module.isModernMessageTopRightEnabled()) {
@@ -258,9 +257,7 @@ public final class Modern626FeatureHooks {
                 patched.add(item);
             }
             if (message == null) {
-                message = itemConstructor.newInstance(
-                        "38", "消息", MESSAGE_ROUTE_URI, null, null,
-                        0, 0, null, null, 0, 131064);
+                message = itemConstructor.create("38", "消息", MESSAGE_ROUTE_URI, null);
             }
             patched.add(0, message);
             converterInputField.set(chain.getThisObject(), patched);
@@ -275,12 +272,13 @@ public final class Modern626FeatureHooks {
     private void patchModern640HomeData(
             Object data,
             Class<?> itemClass,
-            Constructor<?> itemConstructor,
+            HomeItemFactory itemConstructor,
             Field topRightField,
             Field topTabField,
             Field bottomTabField,
             Field itemUriField) throws Throwable {
-        if (data == null) {
+        if (data == null || (!module.isModernMessageTopRightEnabled()
+                && !module.isModernLiveEnabled())) {
             return;
         }
         List<?> originalTopRight = listValue(topRightField.get(data));
@@ -295,9 +293,7 @@ public final class Modern626FeatureHooks {
             Object bottomMessage = removeMessageItems(bottomTabs, itemUriField);
             if (!containsAnyMessage(topRight, itemUriField)) {
                 Object message = bottomMessage != null ? bottomMessage
-                        : itemConstructor.newInstance(
-                        "38", "消息", MESSAGE_ROUTE_URI, null, null,
-                        0, 0, null, null, 0, 131064);
+                        : itemConstructor.create("38", "消息", MESSAGE_ROUTE_URI, null);
                 // TopRightComponent only constructs the message action for the
                 // canonical route. It rewrites this to action://link/home/menu
                 // itself after resolving redirects and query parameters.
@@ -309,10 +305,8 @@ public final class Modern626FeatureHooks {
         }
 
         if (module.isModernLiveEnabled()
-                && !containsRoute(topTabs, itemClass.getName(), "c", LIVE_URI)) {
-            Object live = itemConstructor.newInstance(
-                    "168", "直播", LIVE_URI, null, null,
-                    0, 0, "直播tab", null, 0, 130936);
+                && indexOfRoute(topTabs, itemUriField, LIVE_URI) < 0) {
+            Object live = itemConstructor.create("168", "直播", LIVE_URI, "直播tab");
             int recommended = indexOfRoute(
                     topTabs, itemUriField, "bilibili://pegasus/promo");
             topTabs.add(recommended < 0 ? 0 : recommended, live);

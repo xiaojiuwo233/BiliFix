@@ -5,6 +5,7 @@ import android.net.Uri;
 
 import com.xjw.bilifix.in.core.HookApi;
 import com.xjw.bilifix.in.core.HostApplication;
+import com.xjw.bilifix.in.core.DexSymbolResolver;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
@@ -71,6 +72,7 @@ public final class IpLocationHooks {
 
     private final HookApi module;
     private final ClassLoader classLoader;
+    private final DexSymbolResolver symbolResolver;
     private final ThreadLocal<RequestScope> requestScope = new ThreadLocal<>();
     private final Map<Object, RequestScope> mossCallScopes = Collections.synchronizedMap(new WeakHashMap<>());
     private final AtomicInteger requestLogCount = new AtomicInteger();
@@ -84,8 +86,14 @@ public final class IpLocationHooks {
     private final AtomicInteger modernFinalHeaderLogCount = new AtomicInteger();
 
     public IpLocationHooks(HookApi module, ClassLoader classLoader) {
+        this(module, classLoader, null);
+    }
+
+    public IpLocationHooks(
+            HookApi module, ClassLoader classLoader, DexSymbolResolver symbolResolver) {
         this.module = module;
         this.classLoader = classLoader;
+        this.symbolResolver = symbolResolver;
     }
 
     public void install() {
@@ -110,21 +118,19 @@ public final class IpLocationHooks {
         installGroup("6.2.6 Moss comment request scope", this::installModernMossScope);
         installGroup("6.2.6 KMetadata identity", this::installModernMetadataIdentity);
         installGroup("6.2.6 REST request identity", this::installModernRestIdentity);
-        installGroup("6.2.6 comment location binding", this::installModernCommentBinding);
+        // Native location UI needs only the existing identity rewrite. Do not
+        // install diagnostic comment traversal/binding probes in release builds.
     }
 
     private void installModernFinalBinaryIdentity() throws Throwable {
         Class<?> eventClass = module.load(classLoader,
                 "kntr.base.moss.MossInterceptor$e");
-        Class<?> requestClass = module.load(classLoader,
-                "kntr.base.moss.ignet.impl.grpc.c");
         Field requestDescriptor = findModernMossDescriptorField(eventClass);
         Class<?> descriptorClass = requestDescriptor.getType();
         Field[] descriptorNames = findModernMossDescriptorNameFields(descriptorClass);
         Field serviceName = descriptorNames[0];
         Field methodName = descriptorNames[1];
-        Method putBinaryHeader = module.declaredMethod(
-                requestClass, "f", String.class, byte[].class);
+        Method putBinaryHeader = findModernMossBinarySetter(eventClass);
 
         module.info("modern final Moss descriptor resolved structurally: requestField="
                 + requestDescriptor.getDeclaringClass().getName() + "."
@@ -132,7 +138,7 @@ public final class IpLocationHooks {
                 + " serviceField=" + serviceName.getName()
                 + " methodField=" + methodName.getName());
 
-        module.deoptimizeFeatureMethod(putBinaryHeader);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(putBinaryHeader);
         module.addHook("6.2.6 final Moss binary identity", putBinaryHeader,
                 hookChain -> {
                     Object headerValue = hookChain.getArg(0);
@@ -198,6 +204,29 @@ public final class IpLocationHooks {
                     args[1] = rewritten;
                     return hookChain.proceed(args);
                 });
+    }
+
+    private static Method findModernMossBinarySetter(Class<?> eventClass)
+            throws NoSuchMethodException {
+        Method match = null;
+        for (Method getter : eventClass.getDeclaredMethods()) {
+            Class<?> request = getter.getReturnType();
+            if (getter.getParameterCount() != 0 || !eventClass.isAssignableFrom(request)
+                    || java.lang.reflect.Modifier.isAbstract(request.getModifiers())) continue;
+            for (Method method : request.getDeclaredMethods()) {
+                if (method.getReturnType() != void.class
+                        || java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                        || !Arrays.equals(method.getParameterTypes(),
+                                new Class<?>[]{String.class, byte[].class})) continue;
+                if (match != null && !match.equals(method)) {
+                    throw new NoSuchMethodException("multiple final Moss binary setters");
+                }
+                match = method;
+            }
+        }
+        if (match == null) throw new NoSuchMethodException("final Moss binary setter not found");
+        match.setAccessible(true);
+        return match;
     }
 
     private static Field findModernMossDescriptorField(Class<?> eventClass)
@@ -554,6 +583,14 @@ public final class IpLocationHooks {
                 "com.bilibili.nativelibrary.LibBili");
         Method domesticAppKey = module.declaredMethod(libBiliClass, "f", String.class);
         int installed = 0;
+        if (module.hostVersion().isModern690OrNewer() && symbolResolver != null) {
+            for (Method method : symbolResolver.resolveSpaceParameterMethods()) {
+                installModernCommonParamHook(method, "space REST", domesticAppKey);
+                installed++;
+            }
+            if (installed == 0) throw new NoSuchMethodException("space endpoint interceptor not found");
+            return;
+        }
         installed += installModernCommonParamHook(
                 "com.bilibili.app.comm.list.common.api.e", "profile REST", domesticAppKey);
         installed += installModernCommonParamHook(
@@ -647,7 +684,14 @@ public final class IpLocationHooks {
             module.debug("6.4 REST interceptor has no addCommonParam: " + className);
             return 0;
         }
-        module.deoptimizeFeatureMethod(addCommonParam);
+        installModernCommonParamHook(addCommonParam, label, domesticAppKey);
+        return 1;
+    }
+
+    private void installModernCommonParamHook(
+            Method addCommonParam, String label, Method domesticAppKey) {
+        String className = addCommonParam.getDeclaringClass().getName();
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(addCommonParam);
         module.addHook("6.4 " + label + " identity", addCommonParam, hookChain -> {
             Object result = hookChain.proceed();
             module.ensureFeatureSettings(currentApplication());
@@ -673,7 +717,6 @@ public final class IpLocationHooks {
             }
             return result;
         });
-        return 1;
     }
 
     private void installModernCommentBinding() throws Throwable {

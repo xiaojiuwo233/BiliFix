@@ -51,6 +51,7 @@ public final class DexSymbolResolver implements AutoCloseable {
     private final Map<String, StoryPlayerSymbols> storyPlayerSymbols = new HashMap<>();
     private ModernHomeSymbols modernHomeSymbols;
     private final Map<String, Class<?>> followingLiveModelClasses = new HashMap<>();
+    private final Set<Method> deoptimizedCallers = new HashSet<>();
 
     public DexSymbolResolver(
             HookApi module,
@@ -238,7 +239,7 @@ public final class DexSymbolResolver implements AutoCloseable {
                 return null;
             }
 
-            Constructor<?> itemConstructor = findCompactHomeItemConstructor(itemClass);
+            HomeItemFactory itemConstructor = HomeItemFactory.resolve(itemClass);
             List<Field> dataLists = instanceFieldsOfType(dataClass, List.class);
             List<Field> itemStrings = instanceFieldsOfType(itemClass, String.class);
             Field frameTabData = uniqueInstanceField(frameStateClass, dataClass);
@@ -256,7 +257,6 @@ public final class DexSymbolResolver implements AutoCloseable {
             Method converter = findTopRightConverter(current);
             Field converterInput = converter == null ? null
                     : uniqueInstanceField(converter.getDeclaringClass(), Object.class);
-            itemConstructor.setAccessible(true);
             dataLists.forEach(field -> field.setAccessible(true));
             itemStrings.forEach(field -> field.setAccessible(true));
             frameTabData.setAccessible(true);
@@ -340,17 +340,22 @@ public final class DexSymbolResolver implements AutoCloseable {
             DexKitBridge current = requireBridge();
             MethodDataList candidates = current.findMethod(FindMethod.create()
                     .matcher(MethodMatcher.create()
-                            .paramCount(10)
+                            .paramCount(9, 10)
                             .returnType("void")
                             .usingStrings("CardClickExt")));
             Method match = null;
             for (MethodData candidate : candidates) {
                 List<String> parameters = candidate.getParamTypeNames();
-                if (parameters.size() != 10
-                        || !"android.content.Context".equals(parameters.get(0))
+                int booleanIndex = parameters.size() - 3;
+                if (!"android.content.Context".equals(parameters.get(0))
                         || !"android.net.Uri".equals(parameters.get(2))
-                        || !"boolean".equals(parameters.get(7))
-                        || !"java.util.Map".equals(parameters.get(9))) {
+                        || !"java.lang.String".equals(parameters.get(3))
+                        || !"java.lang.String".equals(parameters.get(4))
+                        || !"java.lang.String".equals(parameters.get(5))
+                        || !"boolean".equals(parameters.get(booleanIndex))
+                        || !"com.bilibili.pegasus.ext.router.SpecialSpmidType".equals(
+                                parameters.get(booleanIndex + 1))
+                        || !"java.util.Map".equals(parameters.get(parameters.size() - 1))) {
                     continue;
                 }
                 Method method = candidate.getMethodInstance(classLoader);
@@ -387,21 +392,22 @@ public final class DexSymbolResolver implements AutoCloseable {
             DexKitBridge current = requireBridge();
             MethodDataList candidates = current.findMethod(FindMethod.create()
                     .matcher(MethodMatcher.create()
-                            .paramTypes(
-                                    "android.content.Context",
-                                    "android.net.Uri",
-                                    "java.lang.String",
-                                    "java.lang.String",
-                                    "java.lang.String",
-                                    "java.util.Map",
-                                    "int",
-                                    "boolean")
+                            .paramCount(7, 8)
                             .returnType("com.bilibili.lib.blrouter.RouteResponse")
                             .usingEqStrings(
                                     "from", "jumpFrom", "sourceFrom",
                                     "intentFrom", "extra_jump_from")));
             Method central = null;
             for (MethodData candidate : candidates) {
+                List<String> types = candidate.getParamTypeNames();
+                if (!types.get(0).equals("android.content.Context")
+                        || !types.get(1).equals("android.net.Uri")
+                        || !types.get(2).equals("java.lang.String")
+                        || !types.get(3).equals("java.lang.String")
+                        || !types.get(4).equals("java.lang.String")
+                        || !types.get(5).equals("java.util.Map")
+                        || !types.get(6).equals("int")
+                        || (types.size() == 8 && !types.get(7).equals("boolean"))) continue;
                 Method method = candidate.getMethodInstance(classLoader);
                 if (!Modifier.isStatic(method.getModifiers())) {
                     continue;
@@ -506,6 +512,140 @@ public final class DexSymbolResolver implements AutoCloseable {
         }
     }
 
+    /** The 6.9 client handles menus after converting protobufs to render models. */
+    public synchronized RenderImSymbols resolveRenderImMenuSymbols() {
+        try {
+            DexKitBridge current = requireBridge();
+            Class<?> menu = findUniqueClass(current, "ClientMenuItem(label=",
+                    type -> instanceFieldsOfType(type, String.class).size() == 2);
+            if (menu == null) return null;
+            Field action = null;
+            for (Field field : menu.getDeclaredFields()) {
+                if (!Modifier.isStatic(field.getModifiers()) && field.getType().isInterface()) {
+                    if (action != null) return null;
+                    action = field;
+                }
+            }
+            if (action == null) return null;
+            final Class<?> actionType = action.getType();
+            Class<?> copy = findUniqueClass(current, "Copy(text=", type ->
+                    actionType.isAssignableFrom(type)
+                            && instanceFieldsOfType(type, String.class).size() == 1);
+            if (copy == null) return null;
+            Field textField = uniqueInstanceField(copy, String.class);
+            MethodDataList candidates = current.findMethod(FindMethod.create()
+                    .matcher(MethodMatcher.create()
+                            .paramTypes(menu.getName(), null, null,
+                                    "kotlin.coroutines.jvm.internal.SuspendLambda")
+                            .returnType(Object.class)));
+            Method dispatch = null;
+            for (MethodData candidate : candidates) {
+                List<String> parameters = candidate.getParamTypeNames();
+                if (!Modifier.isStatic(candidate.getModifiers())
+                        || !menu.getName().equals(parameters.get(0))
+                        || !parameters.get(3).contains("SuspendLambda")
+                        || !readsField(candidate, menu.getName(), action.getName())) continue;
+                if (dispatch != null) return null;
+                dispatch = candidate.getMethodInstance(classLoader);
+            }
+            if (dispatch == null) return null;
+            action.setAccessible(true);
+            textField.setAccessible(true);
+            dispatch.setAccessible(true);
+            module.info("DexKit render IM menu resolved: dispatch=" + dispatch
+                    + " copy=" + copy.getName() + " text=" + textField.getName());
+            return new RenderImSymbols(dispatch, action, copy, textField);
+        } catch (Throwable throwable) {
+            module.warn("DexKit render IM menu resolution failed: " + throwable);
+            return null;
+        }
+    }
+
+    public synchronized Method resolveVideoDescriptionCopyMethod() {
+        try {
+            MethodDataList candidates = requireBridge().findMethod(FindMethod.create()
+                    .matcher(MethodMatcher.create()
+                            .declaredClass(ClassMatcher.create().className(
+                                    "com.bilibili.ship.theseus.ugc.intro.ugcheadline.",
+                                    StringMatchType.StartsWith, false))
+                            .returnType(void.class).usingEqStrings("clipboard", "text")));
+            Method match = null;
+            for (MethodData candidate : candidates) {
+                List<String> parameters = candidate.getParamTypeNames();
+                if (Modifier.isStatic(candidate.getModifiers()) || parameters.isEmpty()
+                        || !parameters.get(0).equals("java.lang.String")
+                        || parameters.size() > 2
+                        || (parameters.size() == 2 && !parameters.get(1).equals("boolean"))) continue;
+                if (match != null) return null;
+                match = candidate.getMethodInstance(classLoader);
+            }
+            if (match != null) {
+                match.setAccessible(true);
+                module.info("DexKit description COPY callback resolved: " + match);
+            }
+            return match;
+        } catch (Throwable throwable) {
+            module.warn("DexKit description COPY resolution failed: " + throwable);
+            return null;
+        }
+    }
+
+    /** Retrofit's endpoint annotation retains the interceptor type after R8 relocation. */
+    public List<Method> resolveSpaceParameterMethods() {
+        ArrayList<Method> result = new ArrayList<>();
+        for (String apiName : new String[]{
+                "com.bilibili.app.authorspace.api.BiliSpaceApiService",
+                "com.bilibili.app.authorspace.local.utils.SpaceApi"}) {
+            try {
+                Class<?> api = module.load(classLoader, apiName);
+                for (Method endpoint : api.getDeclaredMethods()) {
+                    Class<?> interceptor = null;
+                    boolean spaceRead = false;
+                    for (java.lang.annotation.Annotation annotation : endpoint.getDeclaredAnnotations()) {
+                        Class<? extends java.lang.annotation.Annotation> type = annotation.annotationType();
+                        if (type.getName().equals("retrofit2.http.GET")) {
+                            Object path = type.getDeclaredMethod("value").invoke(annotation);
+                            spaceRead = "/x/v2/space".equals(path)
+                                    || "https://app.bilibili.com/x/v2/space".equals(path);
+                        } else if (type.getName().equals("com.bilibili.okretro.anno.RequestInterceptor")) {
+                            Object value = type.getDeclaredMethod("value").invoke(annotation);
+                            if (value instanceof Class) interceptor = (Class<?>) value;
+                        }
+                    }
+                    if (!spaceRead || interceptor == null) continue;
+                    Method params = interceptor.getMethod("addCommonParam", Map.class);
+                    if (params.getReturnType() != void.class || Modifier.isStatic(params.getModifiers())) continue;
+                    params.setAccessible(true);
+                    if (!result.contains(params)) result.add(params);
+                }
+            } catch (Throwable throwable) {
+                module.warn("space endpoint interceptor lookup unavailable: api="
+                        + apiName + " cause=" + throwable);
+            }
+        }
+        module.info("space REST interceptors resolved from annotations: " + result);
+        return result;
+    }
+
+    public synchronized void deoptimizeDirectCallers(Method target) {
+        try {
+            MethodData data = requireBridge().getMethodData(target);
+            if (data == null) return;
+            for (MethodData caller : data.getCallers()) {
+                if (caller.getMethodName().startsWith("<")
+                        || Modifier.isAbstract(caller.getModifiers())
+                        || Modifier.isNative(caller.getModifiers())) continue;
+                // DexKit verifies that caller directly invokes target. Deoptimize
+                // that caller so ART cannot bypass the hooked callee by inlining.
+                Method method = caller.getMethodInstance(classLoader);
+                if (deoptimizedCallers.add(method)) module.deoptimizeFeatureMethod(method);
+            }
+        } catch (Throwable throwable) {
+            module.warn("DexKit caller deoptimization unavailable: target="
+                    + target + " cause=" + throwable);
+        }
+    }
+
     private static Constructor<?> findLiveModelConstructor(
             Class<?> type, Class<?> upListClass) {
         for (Constructor<?> constructor : type.getDeclaredConstructors()) {
@@ -560,7 +700,7 @@ public final class DexSymbolResolver implements AutoCloseable {
     private static boolean isHomeTabItemClass(Class<?> type) {
         return type != null
                 && instanceFieldsOfType(type, String.class).size() >= 5
-                && findCompactHomeItemConstructor(type) != null;
+                && HomeItemFactory.resolve(type) != null;
     }
 
     private static boolean hasConstructorWithListCount(Class<?> type, int expected) {
@@ -576,28 +716,6 @@ public final class DexSymbolResolver implements AutoCloseable {
             }
         }
         return false;
-    }
-
-    private static Constructor<?> findCompactHomeItemConstructor(Class<?> type) {
-        for (Constructor<?> constructor : type.getDeclaredConstructors()) {
-            Class<?>[] parameters = constructor.getParameterTypes();
-            if (parameters.length != 11
-                    || parameters[0] != String.class
-                    || parameters[1] != String.class
-                    || parameters[2] != String.class
-                    || parameters[3] != String.class
-                    || parameters[4] != String.class
-                    || parameters[5] != int.class
-                    || parameters[6] != int.class
-                    || parameters[7] != String.class
-                    || !List.class.isAssignableFrom(parameters[8])
-                    || parameters[9] != int.class
-                    || parameters[10] != int.class) {
-                continue;
-            }
-            return constructor;
-        }
-        return null;
     }
 
     private static Method findFrameCopyMethod(Class<?> frameClass, Class<?> dataClass) {
@@ -1185,7 +1303,7 @@ public final class DexSymbolResolver implements AutoCloseable {
     public record ModernHomeSymbols(
             Class<?> dataClass,
             Class<?> itemClass,
-            Constructor<?> itemConstructor,
+            HomeItemFactory itemConstructor,
             Field topRightField,
             Field topTabField,
             Field bottomTabField,
@@ -1202,6 +1320,9 @@ public final class DexSymbolResolver implements AutoCloseable {
     }
 
     public record PegasusRouterSymbols(Method centralRoute, Method defaultWrapper) {
+    }
+
+    public record RenderImSymbols(Method dispatch, Field action, Class<?> copyClass, Field text) {
     }
 
     @FunctionalInterface

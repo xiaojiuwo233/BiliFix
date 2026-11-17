@@ -13,6 +13,7 @@ import android.view.ViewConfiguration;
 import android.widget.TextView;
 
 import com.xjw.bilifix.in.core.HookApi;
+import com.xjw.bilifix.in.core.DexSymbolResolver;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -33,21 +34,47 @@ public final class VideoDescriptionFreeCopyHooks {
 
     private final HookApi module;
     private final ClassLoader classLoader;
+    private final DexSymbolResolver symbolResolver;
     private final AtomicInteger dialogLogCount = new AtomicInteger();
     private final Map<TextView, DownState> downStates = new WeakHashMap<>();
 
-    public VideoDescriptionFreeCopyHooks(HookApi module, ClassLoader classLoader) {
+    public VideoDescriptionFreeCopyHooks(
+            HookApi module, ClassLoader classLoader, DexSymbolResolver symbolResolver) {
         this.module = module;
         this.classLoader = classLoader;
+        this.symbolResolver = symbolResolver;
     }
 
     public void install() {
         try {
+            if (module.hostVersion().isModern690OrNewer()) {
+                installNativeCopyHook();
+                module.info("video description native free copy hook group ready");
+                return;
+            }
             installTouchHook();
             module.info("video description free copy hook group ready");
         } catch (Throwable throwable) {
             module.error("video description free copy hook group unavailable", throwable);
         }
+    }
+
+    private void installNativeCopyHook() throws Throwable {
+        DirectMessageFreeCopyHooks.prepareActivityLookup();
+        Method copy = symbolResolver == null ? null
+                : symbolResolver.resolveVideoDescriptionCopyMethod();
+        if (copy == null) throw new NoSuchMethodException("description COPY callback not found");
+        symbolResolver.deoptimizeDirectCallers(copy);
+        module.addHook("video description native COPY callback", copy, chain -> {
+            if (!module.isCommentFreeCopyEnabled()) return chain.proceed();
+            Object value = chain.getArg(0);
+            android.app.Activity activity = DirectMessageFreeCopyHooks.findResumedActivity();
+            if (!(value instanceof String) || ((String) value).isEmpty() || activity == null) {
+                return chain.proceed();
+            }
+            showSelectableTextDialog(activity, (String) value);
+            return null;
+        });
     }
 
     private void installTouchHook() throws Throwable {

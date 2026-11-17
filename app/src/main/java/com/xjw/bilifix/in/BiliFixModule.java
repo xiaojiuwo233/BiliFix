@@ -109,30 +109,29 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 + " host=" + hostVersion);
 
         if (hostVersion.isModern626OrNewer()) {
+            ensureDexSymbolResolver(param, classLoader);
             installApplicationSettingsHook(classLoader);
         } else if (mainProcess) {
             settingsManager.installUiHooks(classLoader);
             info("unsupported pre-6.x host: only BiliFix incompatibility settings entry installed");
         }
         if (mainProcess && hostVersion.isModern626OrNewer()) {
-            ensureDexSymbolResolver(param, classLoader);
             new CommentFreeCopyHooks(this, classLoader).install();
-            new VideoDescriptionFreeCopyHooks(this, classLoader).install();
+            new VideoDescriptionFreeCopyHooks(this, classLoader, dexSymbolResolver).install();
             new DirectMessageFreeCopyHooks(
                     this, classLoader, dexSymbolResolver).install();
         }
         if (hostVersion.isModern626OrNewer()) {
             if (mainProcess) {
-                ensureDexSymbolResolver(param, classLoader);
                 settingsManager.installUiHooks(classLoader);
                 Modern626FeatureHooks hooks = modernHooks(classLoader);
                 hooks.installEarly();
                 hooks.installReady();
                 new ModernStoryEntryHooks(this, classLoader, dexSymbolResolver).install();
                 new LiveEntranceHooks(this, classLoader, dexSymbolResolver).install();
-                new IpLocationHooks(this, classLoader).installModern626();
+                new IpLocationHooks(this, classLoader, dexSymbolResolver).installModern626();
             } else {
-                new IpLocationHooks(this, classLoader).installModern626();
+                new IpLocationHooks(this, classLoader, dexSymbolResolver).installModern626();
                 info("modern host web process: main-process-only hooks skipped");
             }
         }

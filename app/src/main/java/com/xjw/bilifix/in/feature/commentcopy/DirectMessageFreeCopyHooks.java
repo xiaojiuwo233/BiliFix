@@ -44,6 +44,7 @@ public final class DirectMessageFreeCopyHooks {
     private final AtomicInteger clickLogCount = new AtomicInteger();
     private final AtomicInteger composeClickLogCount = new AtomicInteger();
     private final AtomicInteger dialogLogCount = new AtomicInteger();
+    private static volatile ActivityAccess activityAccess;
 
     public DirectMessageFreeCopyHooks(
             HookApi module,
@@ -55,6 +56,7 @@ public final class DirectMessageFreeCopyHooks {
     }
 
     public void install() {
+        prepareActivityLookup();
         if (module.hostVersion().isModern640OrNewer()) {
             module.debug("direct-message legacy callback skipped on Compose-only 6.4+");
         } else {
@@ -139,10 +141,14 @@ public final class DirectMessageFreeCopyHooks {
 
     private void installComposeConversationHook() {
         try {
+            if (module.hostVersion().isModern690OrNewer()) {
+                installRenderConversationHook();
+                return;
+            }
             Method dispatch = resolveComposeDispatchMethod();
             ComposeCopySymbols copySymbols = resolveComposeCopySymbols(dispatch);
 
-            module.deoptimizeFeatureMethod(dispatch);
+            if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(dispatch);
             module.info("direct-message Compose symbols resolved: dispatch=" + dispatch
                     + " menu=" + dispatch.getParameterTypes()[0].getName()
                     + " copyItem=" + copySymbols.copyItemClass().getName()
@@ -190,6 +196,34 @@ public final class DirectMessageFreeCopyHooks {
         } catch (Throwable throwable) {
             module.error("direct-message Compose free copy hook group unavailable", throwable);
         }
+    }
+
+    private void installRenderConversationHook() throws Throwable {
+        DexSymbolResolver.RenderImSymbols symbols = symbolResolver == null
+                ? null : symbolResolver.resolveRenderImMenuSymbols();
+        if (symbols == null) throw new NoSuchMethodException("render IM menu symbols not found");
+        symbolResolver.deoptimizeDirectCallers(symbols.dispatch());
+        module.addHook("direct-message render COPY dispatch", symbols.dispatch(), chain -> {
+            module.ensureFeatureSettings(currentApplication());
+            if (!module.isCommentFreeCopyEnabled()) return chain.proceed();
+            Object menu = chain.getArg(0);
+            Object action = menu == null ? null : symbols.action().get(menu);
+            if (!symbols.copyClass().isInstance(action)) return chain.proceed();
+            Object content = symbols.text().get(action);
+            Activity activity = findResumedActivity();
+            if (!(content instanceof String) || ((String) content).isEmpty()
+                    || activity == null) return chain.proceed();
+            String text = (String) content;
+            showSelectableTextDialog(activity, text);
+            int sequence = composeClickLogCount.incrementAndGet();
+            if (sequence <= 10 || sequence % 100 == 0) {
+                module.info("direct-message render COPY intercepted: chars="
+                        + text.length() + " sample=" + sequence);
+            }
+            // Suppress the native COPY action before it writes the clipboard.
+            return null;
+        });
+        module.info("direct-message render free copy hook group ready");
     }
 
     private Method resolveComposeDispatchMethod() throws NoSuchMethodException {
@@ -333,19 +367,38 @@ public final class DirectMessageFreeCopyHooks {
         return content instanceof String ? ((String) content).trim() : null;
     }
 
-    private static Activity findResumedActivity() {
+    static void prepareActivityLookup() {
+        if (activityAccess != null) return;
         try {
-            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread", false,
+                    Activity.class.getClassLoader());
             Method currentThread = activityThreadClass.getDeclaredMethod(
                     "currentActivityThread");
             currentThread.setAccessible(true);
-            Object activityThread = currentThread.invoke(null);
+            Field activities = activityThreadClass.getDeclaredField("mActivities");
+            Class<?> recordClass = Class.forName("android.app.ActivityThread$ActivityClientRecord",
+                    false, Activity.class.getClassLoader());
+            Field paused = findField(recordClass, "paused");
+            Field activity = findField(recordClass, "activity");
+            if (paused == null || activity == null) return;
+            activities.setAccessible(true);
+            paused.setAccessible(true);
+            activity.setAccessible(true);
+            activityAccess = new ActivityAccess(currentThread, activities, paused, activity);
+        } catch (Throwable ignored) {
+            // Without a usable foreground window, preserve the native COPY action.
+        }
+    }
+
+    static Activity findResumedActivity() {
+        ActivityAccess access = activityAccess;
+        if (access == null) return null;
+        try {
+            Object activityThread = access.currentThread().invoke(null);
             if (activityThread == null) {
                 return null;
             }
-            Field activitiesField = activityThreadClass.getDeclaredField("mActivities");
-            activitiesField.setAccessible(true);
-            Object activities = activitiesField.get(activityThread);
+            Object activities = access.activities().get(activityThread);
             if (!(activities instanceof Map)) {
                 return null;
             }
@@ -353,15 +406,8 @@ public final class DirectMessageFreeCopyHooks {
                 if (record == null) {
                     continue;
                 }
-                Field pausedField = findField(record.getClass(), "paused");
-                Field activityField = findField(record.getClass(), "activity");
-                if (pausedField == null || activityField == null) {
-                    continue;
-                }
-                pausedField.setAccessible(true);
-                activityField.setAccessible(true);
-                Object activity = activityField.get(record);
-                if (!pausedField.getBoolean(record) && activity instanceof Activity) {
+                Object activity = access.activity().get(record);
+                if (!access.paused().getBoolean(record) && activity instanceof Activity) {
                     return (Activity) activity;
                 }
             }
@@ -369,6 +415,9 @@ public final class DirectMessageFreeCopyHooks {
             // The hidden ActivityThread bookkeeping differs across Android releases.
         }
         return null;
+    }
+
+    private record ActivityAccess(Method currentThread, Field activities, Field paused, Field activity) {
     }
 
     private static Field findField(Class<?> owner, String name) {

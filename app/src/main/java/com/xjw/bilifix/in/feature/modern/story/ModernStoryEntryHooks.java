@@ -131,9 +131,16 @@ public final class ModernStoryEntryHooks {
     private void installPegasusCardClickProcessorHook() throws Throwable {
         Class<?> processorClass = module.load(classLoader,
                 "com.bilibili.pegasus.card.base.CardClickProcessor");
+        installSubgroup("Pegasus processor route", () -> installProcessorRouteHook(processorClass));
+        installSubgroup("Pegasus holder click", () -> installProcessorHolderHook(processorClass));
+        installSubgroup("Pegasus central route", this::installCentralPegasusRouteHook);
+        installSubgroup("Pegasus holder route", this::installModern640HolderRouteHook);
+    }
+
+    private void installProcessorRouteHook(Class<?> processorClass) throws Throwable {
         Method route = findPegasusCardRouteMethod(processorClass);
         Class<?> cardClass = route.getParameterTypes()[2];
-        module.deoptimizeFeatureMethod(route);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(route);
         module.addHook("CardClickProcessor.f route vertical card", route, chain -> {
             ensureSettings();
             if (!module.isModernStoryMasterEnabled()
@@ -175,12 +182,15 @@ public final class ModernStoryEntryHooks {
         });
         module.info("6.4 Pegasus home vertical-card router hook installed: method="
                 + route);
+    }
 
+    private void installProcessorHolderHook(Class<?> processorClass) throws Throwable {
+        Class<?> cardClass = module.load(classLoader, "com.bilibili.pegasus.api.model.BasicIndexItem");
         Method click = findPegasusCardClickMethod(processorClass);
         Class<?> holderClass = click.getParameterTypes()[1];
         Method holderData = findHolderDataMethod(holderClass, cardClass);
         Method setUri = findStringSetter(cardClass);
-        module.deoptimizeFeatureMethod(click);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(click);
         module.addHook("CardClickProcessor.v prepare vertical card", click, chain -> {
             ensureSettings();
             if (!module.isModernStoryMasterEnabled()
@@ -209,7 +219,9 @@ public final class ModernStoryEntryHooks {
             return chain.proceed();
         });
         module.info("6.4 Pegasus holder click hook installed: method=" + click);
+    }
 
+    private void installCentralPegasusRouteHook() throws Throwable {
         try {
         Method centralRoute;
         Method finalRoute;
@@ -251,7 +263,7 @@ public final class ModernStoryEntryHooks {
             throw new NoSuchMethodException("unexpected Pegasus route response: "
                     + centralRoute);
         }
-        module.deoptimizeFeatureMethod(centralRoute);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(centralRoute);
         module.addHook("Pegasus central route vertical card", centralRoute, chain -> {
             ensureSettings();
             if (!module.isModernStoryMasterEnabled()
@@ -294,7 +306,7 @@ public final class ModernStoryEntryHooks {
         });
         module.info("6.4 Pegasus central router hook installed: method=" + centralRoute);
 
-        module.deoptimizeFeatureMethod(finalRoute);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(finalRoute);
         module.addHook("Pegasus final route vertical card", finalRoute, chain -> {
             ensureSettings();
             if (!module.isModernStoryMasterEnabled()
@@ -333,12 +345,6 @@ public final class ModernStoryEntryHooks {
             module.warn("Pegasus central route layer unavailable; other home-card "
                     + "layers remain active: " + throwable);
         }
-        try {
-            installModern640HolderRouteHook();
-        } catch (Throwable throwable) {
-            module.warn("Pegasus holder route layer unavailable; processor/central "
-                    + "layers remain active: " + throwable);
-        }
     }
 
     private void installModern640HolderRouteHook() throws Throwable {
@@ -375,7 +381,7 @@ public final class ModernStoryEntryHooks {
                         + route + " holder=" + symbols.holderClass().getName());
             }
         }
-        module.deoptimizeFeatureMethod(route);
+        if (symbolResolver != null) symbolResolver.deoptimizeDirectCallers(route);
         module.addHook("WE0 holder final route vertical card", route, chain -> {
             ensureSettings();
             if (!module.isModernStoryMasterEnabled()
@@ -653,16 +659,16 @@ public final class ModernStoryEntryHooks {
             Class<?>[] parameters = method.getParameterTypes();
             if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
                     || method.getReturnType() != void.class
-                    || parameters.length != 10
+                    || (parameters.length != 10 && parameters.length != 8)
                     || parameters[0] != processorClass
                     || parameters[1] != Context.class
                     || parameters[3] != Uri.class
                     || parameters[4] != String.class
-                    || parameters[5] != String.class
-                    || parameters[6] != boolean.class
-                    || parameters[7] != int.class
-                    || !Map.class.isAssignableFrom(parameters[8])
-                    || parameters[9] != int.class) {
+                    || (parameters.length == 10 && (parameters[5] != String.class
+                        || parameters[6] != boolean.class || parameters[7] != int.class
+                        || !Map.class.isAssignableFrom(parameters[8]) || parameters[9] != int.class))
+                    || (parameters.length == 8 && (parameters[5] != boolean.class
+                        || !Map.class.isAssignableFrom(parameters[6]) || parameters[7] != int.class))) {
                 continue;
             }
             if (candidate != null) {
@@ -686,14 +692,14 @@ public final class ModernStoryEntryHooks {
             Class<?>[] parameters = method.getParameterTypes();
             if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())
                     || method.getReturnType() != void.class
-                    || parameters.length != 8
+                    || (parameters.length != 8 && parameters.length != 6)
                     || parameters[0] != processorClass
                     || parameters[2] != View.class
                     || parameters[3] != boolean.class
                     || parameters[4] != boolean.class
-                    || parameters[5] != boolean.class
-                    || parameters[6] != boolean.class
-                    || parameters[7] != int.class) {
+                    || (parameters.length == 8 && (parameters[5] != boolean.class
+                        || parameters[6] != boolean.class || parameters[7] != int.class))
+                    || (parameters.length == 6 && parameters[5] != int.class)) {
                 continue;
             }
             if (candidate != null) {
