@@ -10,9 +10,10 @@ import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_COMMENT
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AI_SUBTITLE_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_ARTICLE_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_AUDIO_VIDEO_SYNC_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_COMMENT_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_DYNAMIC_ARTICLE_FIX_ENABLED;
-import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_PAID_EMOTICON_FIX_ENABLED;
+import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_PROFILE_IP_LOCATION_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_REGION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_RELATION_FIX_ENABLED;
 import static com.xjw.bilifix.in.feature.settings.SettingsManager.KEY_SETTINGS_ENTRY;
@@ -295,10 +296,19 @@ final class SettingsUiHooks {
                                 setPersistent, setOrder,
                                 setOnPreferenceChangeListener, setChecked);
                         addSwitch(enhanceCategory, switchConstructor,
-                                KEY_IP_LOCATION_ENABLED,
-                                "显示IP属地",
-                                "和国内版一样在评论区和用户主页显示IP属地",
-                                settings.isIpLocationEnabled(), 1,
+                                KEY_PROFILE_IP_LOCATION_ENABLED,
+                                "主页显示IP属地",
+                                "用户主页显示IP地址",
+                                settings.isProfileIpLocationEnabled(), 1,
+                                changeListenerClass, context,
+                                addPreference, setKey, setTitle, setSummary,
+                                setPersistent, setOrder,
+                                setOnPreferenceChangeListener, setChecked);
+                        addSwitch(enhanceCategory, switchConstructor,
+                                KEY_COMMENT_IP_LOCATION_ENABLED,
+                                "评论区显示IP属地（已弃用）",
+                                "国际版已原生支持显示，非必要请勿再次开启",
+                                settings.isCommentIpLocationEnabled(), 2,
                                 changeListenerClass, context,
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
@@ -307,7 +317,7 @@ final class SettingsUiHooks {
                                 KEY_AI_SUBTITLE_ENABLED,
                                 "字幕增强",
                                 "获取由b站AI生成的视频字幕资源",
-                                settings.isAiSubtitleEnabled(), 2,
+                                settings.isAiSubtitleEnabled(), 3,
                                 changeListenerClass, context,
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
@@ -316,7 +326,7 @@ final class SettingsUiHooks {
                                 KEY_AI_COMMENT_TRANSLATION_ENABLED,
                                 "评论AI翻译（实验性）",
                                 "位于长按评论菜单中，移植于国内版新特性，可能会存在问题",
-                                settings.isAiCommentTranslationEnabled(), 3,
+                                settings.isAiCommentTranslationEnabled(), 4,
                                 changeListenerClass, context,
                                 addPreference, setKey, setTitle, setSummary,
                                 setPersistent, setOrder,
@@ -359,7 +369,10 @@ final class SettingsUiHooks {
                                 + " regionFix=" + settings.isRegionFixEnabled()
                                 + " relationFix=" + settings.isRelationFixEnabled()
                                 + " walletFix=" + settings.isWalletFixEnabled()
-                                + " ipLocation=" + settings.isIpLocationEnabled()
+                                + " profileIpLocation="
+                                + settings.isProfileIpLocationEnabled()
+                                + " commentIpLocation="
+                                + settings.isCommentIpLocationEnabled()
                                 + " spaceDomesticModules="
                                 + settings.isSpaceDomesticModulesEnabled()
                                 + " aiSubtitle=" + settings.isAiSubtitleEnabled()

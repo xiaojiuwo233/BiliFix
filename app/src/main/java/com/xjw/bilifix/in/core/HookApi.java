@@ -30,7 +30,9 @@ public interface HookApi {
 
     boolean isWalletFixEnabled();
 
-    boolean isIpLocationEnabled();
+    boolean isProfileIpLocationEnabled();
+
+    boolean isCommentIpLocationEnabled();
 
     boolean isSpaceDomesticModulesEnabled();
 

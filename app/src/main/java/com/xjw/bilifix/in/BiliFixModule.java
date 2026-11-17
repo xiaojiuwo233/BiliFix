@@ -47,6 +47,7 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     private final List<Feature> features = new ArrayList<>();
     private volatile Handler mainHandler;
     private volatile SystemShareHooks systemShareHooks;
+    private IpLocationHooks ipLocationHooks;
     private volatile HostVersion hostVersion;
     private volatile ClassLoader hostClassLoader;
     private volatile MossHookHub mossHub;
@@ -131,10 +132,13 @@ public final class BiliFixModule extends XposedModule implements HookApi {
         features.add(new Feature("paid emoticon",
                 settingsManager::isPaidEmoticonFixEnabled,
                 () -> new PaidEmoticonHooks(this, classLoader, rest).install()));
-        features.add(new Feature("IP location",
-                () -> settingsManager.isIpLocationEnabled()
+        features.add(new Feature("profile IP location",
+                () -> settingsManager.isProfileIpLocationEnabled()
                         || settingsManager.isSpaceDomesticModulesEnabled(),
-                () -> new IpLocationHooks(this, classLoader, moss, rest).install()));
+                () -> ipLocationHooks().installProfile()));
+        features.add(new Feature("comment IP location",
+                settingsManager::isCommentIpLocationEnabled,
+                () -> ipLocationHooks().installComment()));
         if (mainProcess) {
             features.add(new Feature("audio/video sync",
                     settingsManager::isAudioVideoSyncEnabled,
@@ -193,6 +197,17 @@ public final class BiliFixModule extends XposedModule implements HookApi {
                 + " features=" + featuresInstalled
                 + " hooksAdded=" + (hookHandles.size() - installedBefore)
                 + " hooksTotal=" + hookHandles.size());
+    }
+
+    /**
+     * The profile and comment features share one instance (request scope, REST hooks).
+     * Only reached from feature installers, which run under installEnabledFeatures' lock.
+     */
+    private IpLocationHooks ipLocationHooks() {
+        if (ipLocationHooks == null) {
+            ipLocationHooks = new IpLocationHooks(this, hostClassLoader, mossHub, restHub);
+        }
+        return ipLocationHooks;
     }
 
     private static final class Feature {
@@ -340,8 +355,13 @@ public final class BiliFixModule extends XposedModule implements HookApi {
     }
 
     @Override
-    public boolean isIpLocationEnabled() {
-        return settingsManager.isIpLocationEnabled();
+    public boolean isProfileIpLocationEnabled() {
+        return settingsManager.isProfileIpLocationEnabled();
+    }
+
+    @Override
+    public boolean isCommentIpLocationEnabled() {
+        return settingsManager.isCommentIpLocationEnabled();
     }
 
     @Override

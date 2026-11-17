@@ -43,8 +43,13 @@ public final class SettingsManager {
             "bilifix_relation_fix_enabled";
     static final String KEY_WALLET_FIX_ENABLED =
             "bilifix_wallet_fix_enabled";
-    static final String KEY_IP_LOCATION_ENABLED =
+    // The pre-split "show IP location" key now only drives the profile half. Reusing it
+    // keeps the profile switch on for users who had the combined switch enabled, while the
+    // deprecated comment half starts unchecked under its own new key.
+    static final String KEY_PROFILE_IP_LOCATION_ENABLED =
             "bilifix_ip_location_enabled";
+    static final String KEY_COMMENT_IP_LOCATION_ENABLED =
+            "bilifix_comment_ip_location_enabled";
     static final String KEY_SPACE_DOMESTIC_MODULES_ENABLED =
             "bilifix_space_domestic_modules_enabled";
     static final String KEY_AI_SUBTITLE_ENABLED =
@@ -300,8 +305,12 @@ public final class SettingsManager {
         return state.walletFix;
     }
 
-    public boolean isIpLocationEnabled() {
-        return state.ipLocation;
+    public boolean isProfileIpLocationEnabled() {
+        return state.profileIpLocation;
+    }
+
+    public boolean isCommentIpLocationEnabled() {
+        return state.commentIpLocation;
     }
 
     public boolean isSpaceDomesticModulesEnabled() {
@@ -339,7 +348,8 @@ public final class SettingsManager {
         final boolean regionFix;
         final boolean relationFix;
         final boolean walletFix;
-        final boolean ipLocation;
+        final boolean profileIpLocation;
+        final boolean commentIpLocation;
         final boolean spaceDomesticModules;
         final boolean aiSubtitle;
         final boolean aiCommentTranslation;
@@ -354,7 +364,8 @@ public final class SettingsManager {
                 boolean regionFix,
                 boolean relationFix,
                 boolean walletFix,
-                boolean ipLocation,
+                boolean profileIpLocation,
+                boolean commentIpLocation,
                 boolean spaceDomesticModules,
                 boolean aiSubtitle,
                 boolean aiCommentTranslation,
@@ -367,7 +378,8 @@ public final class SettingsManager {
             this.regionFix = regionFix;
             this.relationFix = relationFix;
             this.walletFix = walletFix;
-            this.ipLocation = ipLocation;
+            this.profileIpLocation = profileIpLocation;
+            this.commentIpLocation = commentIpLocation;
             this.spaceDomesticModules = spaceDomesticModules;
             this.aiSubtitle = aiSubtitle;
             this.aiCommentTranslation = aiCommentTranslation;
@@ -382,7 +394,7 @@ public final class SettingsManager {
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
-                    DEFAULT_FEATURE_ENABLED,
+                    DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED,
                     DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED, DEFAULT_FEATURE_ENABLED);
         }
 
@@ -399,7 +411,9 @@ public final class SettingsManager {
                     preferences.getBoolean(
                             KEY_WALLET_FIX_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
-                            KEY_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                            KEY_PROFILE_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
+                    preferences.getBoolean(
+                            KEY_COMMENT_IP_LOCATION_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
                             KEY_SPACE_DOMESTIC_MODULES_ENABLED, DEFAULT_FEATURE_ENABLED),
                     preferences.getBoolean(
@@ -423,7 +437,8 @@ public final class SettingsManager {
                     valueOf(values, KEY_REGION_FIX_ENABLED),
                     valueOf(values, KEY_RELATION_FIX_ENABLED),
                     valueOf(values, KEY_WALLET_FIX_ENABLED),
-                    valueOf(values, KEY_IP_LOCATION_ENABLED),
+                    valueOf(values, KEY_PROFILE_IP_LOCATION_ENABLED),
+                    valueOf(values, KEY_COMMENT_IP_LOCATION_ENABLED),
                     valueOf(values, KEY_SPACE_DOMESTIC_MODULES_ENABLED),
                     valueOf(values, KEY_AI_SUBTITLE_ENABLED),
                     valueOf(values, KEY_AI_COMMENT_TRANSLATION_ENABLED),
@@ -452,7 +467,9 @@ public final class SettingsManager {
                     intent.getBooleanExtra(
                             KEY_WALLET_FIX_ENABLED, fallback.walletFix),
                     intent.getBooleanExtra(
-                            KEY_IP_LOCATION_ENABLED, fallback.ipLocation),
+                            KEY_PROFILE_IP_LOCATION_ENABLED, fallback.profileIpLocation),
+                    intent.getBooleanExtra(
+                            KEY_COMMENT_IP_LOCATION_ENABLED, fallback.commentIpLocation),
                     intent.getBooleanExtra(
                             KEY_SPACE_DOMESTIC_MODULES_ENABLED, fallback.spaceDomesticModules),
                     intent.getBooleanExtra(
@@ -477,7 +494,8 @@ public final class SettingsManager {
                     .putExtra(KEY_REGION_FIX_ENABLED, regionFix)
                     .putExtra(KEY_RELATION_FIX_ENABLED, relationFix)
                     .putExtra(KEY_WALLET_FIX_ENABLED, walletFix)
-                    .putExtra(KEY_IP_LOCATION_ENABLED, ipLocation)
+                    .putExtra(KEY_PROFILE_IP_LOCATION_ENABLED, profileIpLocation)
+                    .putExtra(KEY_COMMENT_IP_LOCATION_ENABLED, commentIpLocation)
                     .putExtra(KEY_SPACE_DOMESTIC_MODULES_ENABLED, spaceDomesticModules)
                     .putExtra(KEY_AI_SUBTITLE_ENABLED, aiSubtitle)
                     .putExtra(KEY_AI_COMMENT_TRANSLATION_ENABLED, aiCommentTranslation)
@@ -493,7 +511,8 @@ public final class SettingsManager {
                     && regionFix == other.regionFix
                     && relationFix == other.relationFix
                     && walletFix == other.walletFix
-                    && ipLocation == other.ipLocation
+                    && profileIpLocation == other.profileIpLocation
+                    && commentIpLocation == other.commentIpLocation
                     && spaceDomesticModules == other.spaceDomesticModules
                     && aiSubtitle == other.aiSubtitle
                     && aiCommentTranslation == other.aiCommentTranslation
@@ -511,7 +530,8 @@ public final class SettingsManager {
                     + " regionFix=" + regionFix
                     + " relationFix=" + relationFix
                     + " walletFix=" + walletFix
-                    + " ipLocation=" + ipLocation
+                    + " profileIpLocation=" + profileIpLocation
+                    + " commentIpLocation=" + commentIpLocation
                     + " spaceDomesticModules=" + spaceDomesticModules
                     + " aiSubtitle=" + aiSubtitle
                     + " aiCommentTranslation=" + aiCommentTranslation

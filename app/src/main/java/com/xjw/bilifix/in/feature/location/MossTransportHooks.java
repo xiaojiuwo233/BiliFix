@@ -54,7 +54,7 @@ final class MossTransportHooks {
         Method start = module.declaredMethod(call, "e", listener, headers);
         GrpcAccess access = new GrpcAccess(module, loader);
         module.addHook("IP location gRPC outgoing headers", start, chain -> {
-            if (module.isIpLocationEnabled()) {
+            if (module.isCommentIpLocationEnabled()) {
                 try {
                     String name = (String) module.invoke(
                             methodName, methodField.get(chain.getThisObject()));
@@ -87,14 +87,14 @@ final class MossTransportHooks {
             @Override
             public Object around(String part, String address, XposedInterface.Chain chain,
                     Object[] args, MossHookHub.Next next) throws Throwable {
-                if (!module.isIpLocationEnabled()) {
+                if (!module.isCommentIpLocationEnabled()) {
                     return next.proceed(args);
                 }
                 Object original = args != null && args.length > 0 ? args[0] : chain.getArg(0);
                 String source = "okhttp-send " + URI.create(address).getRawPath();
                 Object proxy = Proxy.newProxyInstance(loader, new Class<?>[]{chainType},
                         (receiver, method, callArgs) -> {
-                            if (method.equals(proceed) && module.isIpLocationEnabled()) {
+                            if (method.equals(proceed) && module.isCommentIpLocationEnabled()) {
                                 Object outgoing = callArgs[0];
                                 try {
                                     OkHttpAccess.View view = access.view(outgoing);

@@ -104,6 +104,7 @@ public final class IpLocationHooks {
     private final AtomicInteger profileFilterLogCount = new AtomicInteger();
     private final Set<String> observedTabParams =
             Collections.synchronizedSet(new HashSet<>());
+    private boolean restIdentityInstalled;
 
     public IpLocationHooks(HookApi module, ClassLoader classLoader,
             MossHookHub mossHub, RestHookHub restHub) {
@@ -113,17 +114,34 @@ public final class IpLocationHooks {
         this.restHub = restHub;
     }
 
-    public void install() {
-        installGroup("profile and REST comment request identity", this::installRestIdentityHooks);
-        installGroup("Moss comment request identity", this::installMossIdentityHooks);
+    /** Profile half: also carries the domestic space modules, so either switch installs it. */
+    public void installProfile() {
+        installRestIdentityOnce();
         installGroup("profile response filter", this::installProfileResponseFilter);
+    }
+
+    /** Comment half: deprecated, the host now receives comment locations natively. */
+    public void installComment() {
+        installRestIdentityOnce();
+        installGroup("Moss comment request identity", this::installMossIdentityHooks);
+    }
+
+    // One REST scope classifies both profile and comment requests, so whichever half is
+    // enabled first registers it; isMasqueradeEnabled() keeps the other half transparent.
+    private void installRestIdentityOnce() {
+        if (restIdentityInstalled) {
+            return;
+        }
+        restIdentityInstalled = true;
+        installGroup("profile and REST comment request identity", this::installRestIdentityHooks);
     }
 
     private boolean isMasqueradeEnabled(ScopeKind kind) {
         if (kind == ScopeKind.PROFILE_REST) {
-            return module.isIpLocationEnabled() || module.isSpaceDomesticModulesEnabled();
+            return module.isProfileIpLocationEnabled()
+                    || module.isSpaceDomesticModulesEnabled();
         }
-        return module.isIpLocationEnabled();
+        return module.isCommentIpLocationEnabled();
     }
 
     private void installRestIdentityHooks() throws Throwable {
@@ -243,7 +261,7 @@ public final class IpLocationHooks {
             public Object around(String fullMethodName, XposedInterface.Chain chain,
                     Object[] args, MossHookHub.Next next) throws Throwable {
                 module.ensureFeatureSettings(currentApplication());
-                if (!module.isIpLocationEnabled()) {
+                if (!module.isCommentIpLocationEnabled()) {
                     return next.proceed(args);
                 }
                 if (currentCommentSource() != null) {
@@ -311,7 +329,7 @@ public final class IpLocationHooks {
         mossHub.addHeaderPopulateListener(part, (hookPart, interceptor, headers) -> {
             RequestScope scope = requestScope.get();
             if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                    || !module.isIpLocationEnabled()) {
+                    || !module.isCommentIpLocationEnabled()) {
                 return;
             }
             for (HeaderRewrite rewrite : rewrites) {
@@ -420,7 +438,7 @@ public final class IpLocationHooks {
         mossHub.addFactoryRewriter(factory, bytes -> {
             RequestScope scope = requestScope.get();
             if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                    || !module.isIpLocationEnabled()) {
+                    || !module.isCommentIpLocationEnabled()) {
                 return bytes;
             }
             try {
@@ -450,7 +468,7 @@ public final class IpLocationHooks {
             Object result = hookChain.proceed();
             RequestScope scope = requestScope.get();
             if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                    || !module.isIpLocationEnabled() || !(result instanceof String)) {
+                    || !module.isCommentIpLocationEnabled() || !(result instanceof String)) {
                 return result;
             }
             try {
@@ -496,7 +514,7 @@ public final class IpLocationHooks {
             @Override
             public void onCallCreated(String part, String fullMethodName, Object call) {
                 module.ensureFeatureSettings(currentApplication());
-                if (module.isIpLocationEnabled()) {
+                if (module.isCommentIpLocationEnabled()) {
                     mossCallScopes.put(call, new RequestScope(
                             ScopeKind.COMMENT_RPC,
                             "Moss-gRPC " + fullMethodName + " [" + part + "]"));
@@ -512,7 +530,7 @@ public final class IpLocationHooks {
             public Object aroundStart(String part, Object token, XposedInterface.Chain chain,
                     Object[] args, MossHookHub.Next next) throws Throwable {
                 RequestScope scope = (RequestScope) token;
-                if (!module.isIpLocationEnabled()) {
+                if (!module.isCommentIpLocationEnabled()) {
                     return next.proceed(args);
                 }
                 logFinalTransport("grpc", scope.source);
@@ -612,7 +630,7 @@ public final class IpLocationHooks {
             return;
         }
         try {
-            boolean keepLocation = module.isIpLocationEnabled();
+            boolean keepLocation = module.isProfileIpLocationEnabled();
             if (!keepLocation) {
                 Object cardValue = card.get(space);
                 if (cardValue != null && spaceTag.get(cardValue) != null) {
@@ -745,7 +763,7 @@ public final class IpLocationHooks {
     private String currentCommentSource() {
         RequestScope scope = requestScope.get();
         if (scope == null || scope.kind != ScopeKind.COMMENT_RPC
-                || !module.isIpLocationEnabled()) {
+                || !module.isCommentIpLocationEnabled()) {
             return null;
         }
         return scope.source;
